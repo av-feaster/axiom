@@ -37,7 +37,9 @@ class LlamaCppEngine : LLMEngine {
         Log.d(TAG, "Top P: ${config.topP}")
         Log.d(TAG, "Repeat penalty: ${config.repeatPenalty}")
         Log.d(TAG, "Max tokens: ${config.maxTokens}")
-        
+        Log.d(TAG, "Stop tokens: ${config.stopTokens}")
+        Log.d(TAG, "Enable streaming: ${config.enableStreaming}")
+
         try {
             val success = nativeInit(
                 config.modelPath,
@@ -47,7 +49,8 @@ class LlamaCppEngine : LLMEngine {
                 config.topK,
                 config.topP,
                 config.repeatPenalty,
-                config.maxTokens
+                config.maxTokens,
+                config.stopTokens.toTypedArray()
             )
             isEngineInitialized = success
             if (success) {
@@ -127,7 +130,8 @@ class LlamaCppEngine : LLMEngine {
         topK: Int,
         topP: Float,
         repeatPenalty: Float,
-        maxTokens: Int
+        maxTokens: Int,
+        stopTokens: Array<String>
     ): Boolean
 
     private external fun nativeGenerate(prompt: String): String

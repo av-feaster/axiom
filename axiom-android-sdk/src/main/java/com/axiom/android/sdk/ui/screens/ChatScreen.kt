@@ -17,18 +17,26 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
@@ -36,7 +44,15 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.axiom.android.sdk.AxiomSDK
 import com.axiom.android.sdk.engine.AxiomEngine
+import com.axiom.core.StreamingSafeguard
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 
 private const val TAG = "ChatScreen"
 
@@ -52,7 +68,8 @@ private const val SYSTEM_PROMPT = "You are a helpful AI assistant. Always respon
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    modelId: String
+    modelId: String,
+    onNavigateBack: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val engine = AxiomSDK.getEngine()
@@ -153,6 +170,14 @@ fun ChatScreen(
                     )
                 }
             },
+            navigationIcon = {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Back"
+                    )
+                }
+            },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.surface
             )
@@ -177,67 +202,29 @@ fun ChatScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            items(messages) { message ->
+            itemsIndexed(
+                items = messages,
+                key = { index, _ -> index },
+            ) { _, message ->
                 ChatMessageItem(
                     message = message,
                     onRegenerate = {
                         // TODO: Implement regenerate functionality
                     },
                     onCopy = {
-                        // Copy message to clipboard
                         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         val clipData = android.content.ClipData.newPlainText("Message", message.content)
                         clipboard.setPrimaryClip(clipData)
-                    }
+                    },
                 )
             }
 
-            // Synthesizing indicator
-            if (isGenerating) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                text = "Synthesizing...",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary
-                            )
-                        }
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer
-                            ),
-                            shape = MaterialTheme.shapes.medium
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(4.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(4.dp)
-                                        .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f))
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(0.3f)
-                                        .height(4.dp)
-                                        .background(MaterialTheme.colorScheme.tertiary)
-                                )
-                            }
-                        }
-                    }
-                }
+            // Pre–first-token: cycling thinking copy + indeterminate linear bar
+            item(key = "thinking_panel") {
+                ThinkingGenerationPanel(
+                    active = isGenerating && messages.lastOrNull()?.role != "assistant",
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
 
@@ -246,16 +233,7 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
-                .padding(16.dp)
-                .then(
-                    if (CHAT_LAYOUT_DEBUG) {
-                        Modifier.onGloballyPositioned { coords ->
-                            ChatLayoutLog.layoutLine("InputColumn", coords)
-                        }
-                    } else {
-                        Modifier
-                    },
-                ),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Quick action buttons
@@ -264,29 +242,39 @@ fun ChatScreen(
             ) {
                 OutlinedButton(
                     onClick = { messages = emptyList() },
-                    modifier = Modifier.height(32.dp)
+                    modifier = Modifier.height(32.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                 ) {
-                    Text(
-                        text = "Reset Context",
-                        style = MaterialTheme.typography.labelSmall
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Reset",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Reset",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                 }
             }
 
             // Input field with glassmorphism
-            Card(
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.9f)
-                ),
                 shape = MaterialTheme.shapes.extraLarge,
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
+                tonalElevation = 2.dp,
+                shadowElevation = 8.dp
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
@@ -294,19 +282,28 @@ fun ChatScreen(
                         onValueChange = { currentInput = it },
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Enter your message...") },
-                        enabled = !isGenerating
+                        enabled = !isGenerating,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
+                            cursorColor = MaterialTheme.colorScheme.primary
+                        ),
+                        singleLine = true
                     )
 
                     if (isGenerating) {
-                        Button(
+                        IconButton(
                             onClick = { engine.cancel() },
-                            modifier = Modifier.size(48.dp),
-                            shape = MaterialTheme.shapes.medium
+                            modifier = Modifier.size(40.dp)
                         ) {
-                            Text("Stop")
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Stop",
+                                tint = MaterialTheme.colorScheme.error
+                            )
                         }
                     } else {
-                        Button(
+                        IconButton(
                             onClick = {
                                 if (currentInput.isNotBlank()) {
                                     isGenerating = true
@@ -327,8 +324,8 @@ fun ChatScreen(
                                             val conversationHistory = StringBuilder()
                                             conversationHistory.append("System: $systemInstruction\n\n")
 
-                                            // Add previous messages to context (last 5 for context window)
-                                            messages.takeLast(5).forEach { message ->
+                                            // Add previous messages to context (last 5, excluding current)
+                                            messages.dropLast(1).takeLast(5).forEach { message ->
                                                 when (message.role) {
                                                     "user" -> conversationHistory.append("User: ${message.content}\n")
                                                     "assistant" -> conversationHistory.append("Assistant: ${message.content}\n")
@@ -353,49 +350,91 @@ fun ChatScreen(
                                             var tokenCount = 0
                                             var lastTokenTime = System.currentTimeMillis()
                                             val timeoutMs = 30000L // 30 second timeout
+                                            var stoppedOnChatEcho = false
 
-                                            engine.generate(fullPrompt).collect { token ->
-                                                val currentTime = System.currentTimeMillis()
-                                                val timeSinceLastToken = currentTime - lastTokenTime
-                                                lastTokenTime = currentTime
+                                            try {
+                                                engine.generate(fullPrompt).collect { token ->
+                                                    val currentTime = System.currentTimeMillis()
+                                                    val timeSinceLastToken = currentTime - lastTokenTime
+                                                    lastTokenTime = currentTime
 
-                                                if (timeSinceLastToken > 5000) {
-                                                    android.util.Log.w("ChatScreen", "Long gap between tokens: ${timeSinceLastToken}ms")
+                                                    if (timeSinceLastToken > 5000) {
+                                                        android.util.Log.w("ChatScreen", "Long gap between tokens: ${timeSinceLastToken}ms")
+                                                    }
+
+                                                    tokenCount++
+                                                    android.util.Log.d("ChatScreen", "Streamed token #$tokenCount: \"$token\"")
+                                                    assistantResponse += token.replace("\uFFFD", "")
+
+                                                    if (StreamingSafeguard.shouldStopOnChatEcho(assistantResponse)) {
+                                                        assistantResponse = StreamingSafeguard.trimOnChatEcho(assistantResponse)
+                                                        val genMs = System.currentTimeMillis() - generationStartTime
+                                                        android.util.Log.i(
+                                                            TAG,
+                                                            "Stopped generation on chat boundary (echo of next turn) after $tokenCount tokens",
+                                                        )
+                                                        messages = if (messages.lastOrNull()?.role == "assistant") {
+                                                            messages.dropLast(1) + ChatMessage(
+                                                                role = "assistant",
+                                                                content = assistantResponse,
+                                                                tokenCount = tokenCount,
+                                                                generationTimeMs = genMs,
+                                                                isStreaming = false,
+                                                            )
+                                                        } else {
+                                                            messages + ChatMessage(
+                                                                role = "assistant",
+                                                                content = assistantResponse,
+                                                                tokenCount = tokenCount,
+                                                                generationTimeMs = genMs,
+                                                                isStreaming = false,
+                                                            )
+                                                        }
+                                                        stoppedOnChatEcho = true
+                                                        engine.cancel()
+                                                        return@collect
+                                                    }
+
+                                                    messages = if (messages.lastOrNull()?.role == "assistant") {
+                                                        messages.dropLast(1) + ChatMessage(
+                                                            role = "assistant",
+                                                            content = assistantResponse,
+                                                            tokenCount = tokenCount,
+                                                            generationTimeMs = currentTime - generationStartTime,
+                                                            isStreaming = true,
+                                                        )
+                                                    } else {
+                                                        messages + ChatMessage(
+                                                            role = "assistant",
+                                                            content = assistantResponse,
+                                                            tokenCount = tokenCount,
+                                                            generationTimeMs = currentTime - generationStartTime,
+                                                            isStreaming = true,
+                                                        )
+                                                    }
                                                 }
+                                            } catch (_: CancellationException) {
+                                                // User pressed stop or engine cancelled after chat-echo cutoff
+                                            }
 
-                                                tokenCount++
-                                                android.util.Log.d("ChatScreen", "Streamed token #$tokenCount: \"$token\"")
-                                                assistantResponse += token
-                                                // Update last message or add new one
+                                            if (!stoppedOnChatEcho) {
+                                                val generationTimeMs = System.currentTimeMillis() - generationStartTime
+                                                android.util.Log.d(
+                                                    TAG,
+                                                    "Generation complete. Total tokens: $tokenCount, response length: ${assistantResponse.length}, time: ${generationTimeMs}ms",
+                                                )
+
                                                 messages = if (messages.lastOrNull()?.role == "assistant") {
                                                     messages.dropLast(1) + ChatMessage(
                                                         role = "assistant",
                                                         content = assistantResponse,
                                                         tokenCount = tokenCount,
-                                                        generationTimeMs = currentTime - generationStartTime
+                                                        generationTimeMs = generationTimeMs,
+                                                        isStreaming = false,
                                                     )
                                                 } else {
-                                                    messages + ChatMessage(
-                                                        role = "assistant",
-                                                        content = assistantResponse,
-                                                        tokenCount = tokenCount,
-                                                        generationTimeMs = currentTime - generationStartTime
-                                                    )
+                                                    messages
                                                 }
-                                            }
-                                            val generationTimeMs = System.currentTimeMillis() - generationStartTime
-                                            android.util.Log.d("ChatScreen", "Generation complete. Total tokens: $tokenCount, response length: ${assistantResponse.length}, time: ${generationTimeMs}ms")
-
-                                            // Update final message with complete metadata
-                                            messages = if (messages.lastOrNull()?.role == "assistant") {
-                                                messages.dropLast(1) + ChatMessage(
-                                                    role = "assistant",
-                                                    content = assistantResponse,
-                                                    tokenCount = tokenCount,
-                                                    generationTimeMs = generationTimeMs
-                                                )
-                                            } else {
-                                                messages
                                             }
                                         } catch (e: Exception) {
                                             android.util.Log.e("ChatScreen", "Generation failed", e)
@@ -410,12 +449,12 @@ fun ChatScreen(
                                 }
                             },
                             enabled = currentInput.isNotBlank(),
-                            modifier = Modifier.size(48.dp),
-                            shape = MaterialTheme.shapes.medium
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = "Send"
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Send",
+                                tint = if (currentInput.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -425,6 +464,41 @@ fun ChatScreen(
         }
     }
 }
+
+/** Shimmer drawn over assistant text while [ChatMessage.isStreaming] is true. */
+private fun Modifier.assistantStreamingShimmer(enabled: Boolean): Modifier =
+    composed {
+        if (!enabled) return@composed Modifier
+        val transition = rememberInfiniteTransition(label = "assistantStreamShimmer")
+        val shift by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_200, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "assistantShimmerPhase",
+        )
+        val primary = MaterialTheme.colorScheme.primary
+        val onSurface = MaterialTheme.colorScheme.onSurface
+        Modifier.drawWithContent {
+            drawContent()
+            val w = size.width.coerceAtLeast(1f)
+            val h = size.height.coerceAtLeast(1f)
+            val brush = Brush.linearGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    primary.copy(alpha = 0.12f),
+                    onSurface.copy(alpha = 0.07f),
+                    primary.copy(alpha = 0.12f),
+                    Color.Transparent,
+                ),
+                start = Offset(x = shift * (w * 1.5f) - w * 0.35f, y = 0f),
+                end = Offset(x = shift * (w * 1.5f) + w * 0.48f, y = h),
+            )
+            drawRect(brush = brush, alpha = 0.42f)
+        }
+    }
 
 /**
  * Chat message item component
@@ -487,11 +561,29 @@ fun ChatMessageItem(
                 Text(
                     text = message.content,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (message.role == "assistant" &&
+                                message.isStreaming &&
+                                message.content.isBlank()
+                            ) {
+                                Modifier.defaultMinSize(minHeight = 48.dp)
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .assistantStreamingShimmer(
+                            enabled = message.role == "assistant" && message.isStreaming,
+                        ),
                 )
 
-                // Metadata for assistant messages
-                if (message.role == "assistant" && (message.tokenCount > 0 || message.generationTimeMs > 0)) {
+                // Metadata for assistant messages (hidden while streaming)
+                if (message.role == "assistant" &&
+                    !message.isStreaming &&
+                    (message.tokenCount > 0 || message.generationTimeMs > 0)
+                ) {
                     Divider(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.1f)
                     )
@@ -533,7 +625,7 @@ fun ChatMessageItem(
         }
 
         // Action buttons for assistant messages
-        if (message.role == "assistant") {
+        if (message.role == "assistant" && !message.isStreaming) {
             Row(
                 modifier = Modifier.padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -565,5 +657,7 @@ data class ChatMessage(
     val content: String,
     val tokenCount: Int = 0,
     val generationTimeMs: Long = 0,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    /** When true, assistant message is still receiving tokens (shimmer + no metadata). */
+    val isStreaming: Boolean = false,
 )

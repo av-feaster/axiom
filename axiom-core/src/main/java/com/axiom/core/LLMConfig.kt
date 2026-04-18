@@ -11,5 +11,9 @@ data class LLMConfig(
     val topP: Float = 0.95f,
     val repeatPenalty: Float = 1.0f,
     val threads: Int = Runtime.getRuntime().availableProcessors(),
-    val maxTokens: Int = 512
+    val maxTokens: Int = 512,
+    /** Stop tokens to terminate generation early (e.g., ["### User:", "### System:"]) */
+    val stopTokens: List<String> = emptyList(),
+    /** Enable streaming output with safeguards */
+    val enableStreaming: Boolean = true
 )
