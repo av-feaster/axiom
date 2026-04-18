@@ -1,123 +1,200 @@
 package com.axiom.models
 
-import android.app.DownloadManager
 import android.content.Context
-import android.database.Cursor
-import android.net.Uri
-import android.os.Environment
+import android.util.Log
 import com.axiom.core.Model
 import com.axiom.core.ModelManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.coroutines.resume
+import java.net.HttpURLConnection
+import java.net.URL
+
+/** Public Hugging Face GGUF URLs (llama.cpp loads local files only; sample app downloads these first). */
+private fun builtInRegistry(): List<Model> = listOf(
+    Model(
+        id = "tinyllama-1.1b",
+        name = "TinyLlama 1.1B Chat",
+        description = "Small, fast chat model (Q4_K_M GGUF from Hugging Face)",
+        size = 667L * 1024 * 1024,
+        downloadUrl = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        checksum = "",
+        architecture = "llama",
+        quantization = "Q4_K_M",
+        minRam = 3L * 1024 * 1024 * 1024,
+        recommended = true
+    ),
+    Model(
+        id = "qwen2.5-0.5b-instruct",
+        name = "Qwen2.5 0.5B Instruct",
+        description = "Very small instruct model for low-RAM devices (Q4_K_M GGUF)",
+        size = 398L * 1024 * 1024,
+        downloadUrl = "https://huggingface.co/lmstudio-community/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+        checksum = "",
+        architecture = "qwen2",
+        quantization = "Q4_K_M",
+        minRam = 2L * 1024 * 1024 * 1024,
+        recommended = false
+    )
+)
 
 /**
  * Default implementation of ModelManager using Android DownloadManager
  */
 class DefaultModelManager(private val context: Context) : ModelManager {
     
+    companion object {
+        private const val TAG = "ModelManager"
+        private const val TAG_DOWNLOAD = "ModelDownload"
+        private const val TAG_REGISTRY = "ModelRegistry"
+    }
+    
     private val modelsDirectory = File(context.filesDir, "models")
     
     init {
+        Log.i(TAG, "Initializing DefaultModelManager")
+        Log.d(TAG, "Models directory: ${modelsDirectory.absolutePath}")
         if (!modelsDirectory.exists()) {
             modelsDirectory.mkdirs()
+            Log.i(TAG, "Created models directory")
+        } else {
+            Log.d(TAG, "Models directory already exists")
         }
     }
     
     override suspend fun fetchRegistry(): List<Model> = withContext(Dispatchers.IO) {
-        // TODO: Fetch from remote registry
-        // For now, return a hardcoded list of models
-        listOf(
-            Model(
-                id = "tinyllama-1.1b",
-                name = "TinyLlama 1.1B",
-                description = "Small, fast model for quick inference",
-                size = 500 * 1024 * 1024L, // 500MB
-                downloadUrl = "https://example.com/models/tinyllama.gguf",
-                checksum = "sha256:abc123",
-                architecture = "llama",
-                quantization = "Q4_K_M",
-                minRam = 3 * 1024 * 1024 * 1024L, // 3GB
-                recommended = true
-            ),
-            Model(
-                id = "tinymistral-0.2b",
-                name = "TinyMistral 0.2B",
-                description = "Very small model for low-end devices",
-                size = 130 * 1024 * 1024L, // 130MB
-                downloadUrl = "https://example.com/models/tinymistral.gguf",
-                checksum = "sha256:def456",
-                architecture = "mistral",
-                quantization = "Q4_K_M",
-                minRam = 2 * 1024 * 1024 * 1024L, // 2GB
-                recommended = false
-            )
-        )
+        Log.i(TAG_REGISTRY, "Fetching model registry")
+        val models = builtInRegistry()
+        Log.i(TAG_REGISTRY, "Registry fetched: ${models.size} models available")
+        models.forEach { model ->
+            Log.d(TAG_REGISTRY, "  - ${model.id}: ${model.name} (${model.size} bytes)")
+        }
+        models
     }
     
-    override suspend fun download(model: Model, progressCallback: ((Float) -> Unit)?): String = 
+    override suspend fun download(model: Model, progressCallback: ((Float) -> Unit)?): String =
         withContext(Dispatchers.IO) {
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val request = DownloadManager.Request(Uri.parse(model.downloadUrl))
-                .setTitle("Downloading ${model.name}")
-                .setDescription("AI Model")
-                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "${model.id}.gguf")
-                .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
-            
-            val downloadId = downloadManager.enqueue(request)
-            
-            // Wait for download to complete
-            suspendCancellableCoroutine { continuation ->
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                var completed = false
+            Log.i(TAG_DOWNLOAD, "Starting HTTP download for model: ${model.id}")
+            Log.i(TAG_DOWNLOAD, "Model name: ${model.name}")
+            Log.d(TAG_DOWNLOAD, "Download URL: ${model.downloadUrl}")
+            Log.d(TAG_DOWNLOAD, "Expected size: ${model.size} bytes")
+
+            val targetFile = File(modelsDirectory, "${model.id}.gguf")
+            val tempFile = File(modelsDirectory, "${model.id}.gguf.part")
+            if (tempFile.exists()) {
+                Log.d(TAG_DOWNLOAD, "Deleting existing temp file")
+                tempFile.delete()
+            }
+
+            try {
+                Log.d(TAG_DOWNLOAD, "Opening HTTP connection")
+                val connection = (URL(model.downloadUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 30_000
+                    // Large GGUF: do not time out between chunks (DownloadManager was unreliable for HF).
+                    readTimeout = 0
+                    requestMethod = "GET"
+                    setRequestProperty(
+                        "User-Agent",
+                        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 " +
+                            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 AxiomSample/1.0"
+                    )
+                    setRequestProperty("Accept", "*/*")
+                }
+
+                connection.connect()
+                val code = connection.responseCode
+                Log.d(TAG_DOWNLOAD, "HTTP response code: $code")
                 
-                while (!completed) {
-                    val cursor = downloadManager.query(query)
-                    if (cursor.moveToFirst()) {
-                        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                        val bytesDownloadedIndex = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                        val bytesTotalIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                        
-                        val status = cursor.getInt(statusIndex)
-                        val bytesDownloaded = cursor.getLong(bytesDownloadedIndex)
-                        val bytesTotal = cursor.getLong(bytesTotalIndex)
-                        
-                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                            completed = true
-                        } else if (status == DownloadManager.STATUS_FAILED) {
-                            continuation.resumeWith(Result.failure(Exception("Download failed")))
-                            return@suspendCancellableCoroutine
-                        } else {
-                            val progress = if (bytesTotal > 0) bytesDownloaded.toFloat() / bytesTotal else 0f
-                            progressCallback?.invoke(progress)
+                if (code !in 200..299) {
+                    val errBody = connection.errorStream?.use { it.readBytes().decodeToString() }?.take(400) ?: ""
+                    connection.disconnect()
+                    Log.e(TAG_DOWNLOAD, "HTTP error: $code - ${connection.responseMessage}")
+                    Log.e(TAG_DOWNLOAD, "Error body: $errBody")
+                    throw Exception("HTTP $code: ${connection.responseMessage} $errBody")
+                }
+
+                val contentLength = connection.contentLengthLong
+                val totalForProgress = when {
+                    contentLength > 0L -> {
+                        Log.d(TAG_DOWNLOAD, "Content-Length header: $contentLength bytes")
+                        contentLength
+                    }
+                    model.size > 0L -> {
+                        Log.d(TAG_DOWNLOAD, "Using model size: ${model.size} bytes")
+                        model.size
+                    }
+                    else -> {
+                        Log.w(TAG_DOWNLOAD, "No size information available")
+                        -1L
+                    }
+                }
+
+                Log.i(TAG_DOWNLOAD, "Starting download stream")
+                connection.inputStream.buffered().use { input ->
+                    tempFile.outputStream().buffered().use { output ->
+                        val buf = ByteArray(512 * 1024)
+                        var downloaded = 0L
+                        var lastProgressEmit = 0L
+                        var lastLogEmit = 0L
+                        while (true) {
+                            ensureActive()
+                            val n = input.read(buf)
+                            if (n == -1) break
+                            if (n == 0) continue
+                            output.write(buf, 0, n)
+                            downloaded += n
+                            
+                            // Emit progress callback every 256KB
+                            if (totalForProgress > 0L && downloaded - lastProgressEmit >= 256 * 1024L) {
+                                lastProgressEmit = downloaded
+                                val p = (downloaded.toFloat() / totalForProgress.toFloat()).coerceIn(0f, 1f)
+                                progressCallback?.invoke(p)
+                            }
+                            
+                            // Log progress every 10MB
+                            if (downloaded - lastLogEmit >= 10 * 1024 * 1024L) {
+                                lastLogEmit = downloaded
+                                val progress = if (totalForProgress > 0L) {
+                                    String.format("%.1f%%", (downloaded.toFloat() / totalForProgress * 100))
+                                } else {
+                                    "${downloaded / 1024 / 1024}MB"
+                                }
+                                Log.d(TAG_DOWNLOAD, "Download progress: $progress ($downloaded bytes)")
+                            }
                         }
+                        if (totalForProgress > 0L) {
+                            progressCallback?.invoke(1f)
+                        }
+                        Log.i(TAG_DOWNLOAD, "Download stream completed: $downloaded bytes")
                     }
-                    cursor.close()
-                    
-                    if (!completed) {
-                        Thread.sleep(500)
-                    }
+                }
+                connection.disconnect()
+
+                if (targetFile.exists()) {
+                    Log.d(TAG_DOWNLOAD, "Deleting existing target file")
+                    targetFile.delete()
                 }
                 
-                // Get the downloaded file path
-                val cursor = downloadManager.query(query)
-                if (cursor.moveToFirst()) {
-                    val localUriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-                    val localUri = cursor.getString(localUriIndex)
-                    val file = File(Uri.parse(localUri).path!!)
-                    
-                    // Move to models directory
-                    val targetFile = File(modelsDirectory, "${model.id}.gguf")
-                    file.copyTo(targetFile, overwrite = true)
-                    file.delete()
-                    
-                    continuation.resume(targetFile.absolutePath)
+                if (!tempFile.renameTo(targetFile)) {
+                    Log.w(TAG_DOWNLOAD, "Rename failed, using copy instead")
+                    tempFile.copyTo(targetFile, overwrite = true)
+                    tempFile.delete()
                 }
-                cursor.close()
+
+                if (!targetFile.isFile || targetFile.length() < 100_000L) {
+                    Log.e(TAG_DOWNLOAD, "Downloaded file is missing or too small (${targetFile.length()} bytes)")
+                    throw Exception("Downloaded file is missing or too small (${targetFile.length()} bytes)")
+                }
+
+                Log.i(TAG_DOWNLOAD, "Download finished: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                targetFile.absolutePath
+            } catch (e: Exception) {
+                Log.e(TAG_DOWNLOAD, "Download failed for ${model.id}", e)
+                tempFile.delete()
+                throw e
             }
         }
     
@@ -146,33 +223,12 @@ class DefaultModelManager(private val context: Context) : ModelManager {
         
         val availableRam = memoryInfo.totalMem
         
+        val models = builtInRegistry()
         // Recommend based on available RAM
         return when {
             availableRam >= 6 * 1024 * 1024 * 1024L -> null // Could handle larger models
-            availableRam >= 3 * 1024 * 1024 * 1024L -> Model(
-                id = "tinyllama-1.1b",
-                name = "TinyLlama 1.1B",
-                description = "Small, fast model for quick inference",
-                size = 500 * 1024 * 1024L,
-                downloadUrl = "https://example.com/models/tinyllama.gguf",
-                checksum = "sha256:abc123",
-                architecture = "llama",
-                quantization = "Q4_K_M",
-                minRam = 3 * 1024 * 1024 * 1024L,
-                recommended = true
-            )
-            else -> Model(
-                id = "tinymistral-0.2b",
-                name = "TinyMistral 0.2B",
-                description = "Very small model for low-end devices",
-                size = 130 * 1024 * 1024L,
-                downloadUrl = "https://example.com/models/tinymistral.gguf",
-                checksum = "sha256:def456",
-                architecture = "mistral",
-                quantization = "Q4_K_M",
-                minRam = 2 * 1024 * 1024 * 1024L,
-                recommended = false
-            )
+            availableRam >= 3 * 1024 * 1024 * 1024L -> models[0]
+            else -> models[1]
         }
     }
     

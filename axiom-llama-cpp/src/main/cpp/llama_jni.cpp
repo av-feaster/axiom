@@ -9,6 +9,94 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+// UTF-8 validation and sanitization
+static bool is_valid_utf8(const char* str, int len) {
+    for (int i = 0; i < len; ) {
+        unsigned char c = str[i];
+        
+        if (c <= 0x7F) {
+            // ASCII character (0xxxxxxx)
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            // 2-byte sequence (110xxxxx)
+            if (i + 1 >= len || (str[i + 1] & 0xC0) != 0x80) return false;
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            // 3-byte sequence (1110xxxx)
+            if (i + 2 >= len || (str[i + 1] & 0xC0) != 0x80 || (str[i + 2] & 0xC0) != 0x80) return false;
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            // 4-byte sequence (11110xxx)
+            if (i + 3 >= len || (str[i + 1] & 0xC0) != 0x80 || (str[i + 2] & 0xC0) != 0x80 || (str[i + 3] & 0xC0) != 0x80) return false;
+            i += 4;
+        } else {
+            // Invalid UTF-8 start byte
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::string sanitize_utf8(const char* str, int len) {
+    std::string result;
+    for (int i = 0; i < len; ) {
+        unsigned char c = str[i];
+        
+        if (c <= 0x7F) {
+            // ASCII character (0xxxxxxx)
+            result += c;
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            // 2-byte sequence (110xxxxx)
+            if (i + 1 < len && (str[i + 1] & 0xC0) == 0x80) {
+                result += c;
+                result += str[i + 1];
+                i += 2;
+            } else {
+                // Replace invalid byte with replacement character
+                result += 0xEF;
+                result += 0xBF;
+                result += 0xBD;
+                i++;
+            }
+        } else if ((c & 0xF0) == 0xE0) {
+            // 3-byte sequence (1110xxxx)
+            if (i + 2 < len && (str[i + 1] & 0xC0) == 0x80 && (str[i + 2] & 0xC0) == 0x80) {
+                result += c;
+                result += str[i + 1];
+                result += str[i + 2];
+                i += 3;
+            } else {
+                result += 0xEF;
+                result += 0xBF;
+                result += 0xBD;
+                i++;
+            }
+        } else if ((c & 0xF8) == 0xF0) {
+            // 4-byte sequence (11110xxx)
+            if (i + 3 < len && (str[i + 1] & 0xC0) == 0x80 && (str[i + 2] & 0xC0) == 0x80 && (str[i + 3] & 0xC0) == 0x80) {
+                result += c;
+                result += str[i + 1];
+                result += str[i + 2];
+                result += str[i + 3];
+                i += 4;
+            } else {
+                result += 0xEF;
+                result += 0xBF;
+                result += 0xBD;
+                i++;
+            }
+        } else {
+            // Invalid UTF-8 start byte - replace with replacement character
+            result += 0xEF;
+            result += 0xBF;
+            result += 0xBD;
+            i++;
+        }
+    }
+    return result;
+}
+
 // Global variables for model and context
 static llama_model* g_model = nullptr;
 static llama_context* g_context = nullptr;
@@ -178,8 +266,11 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeGenerate(JNIEnv* env, jobject /* t
     
     env->ReleaseStringUTFChars(prompt, prompt_cstr);
     
-    LOGI("Generated text: %s", result.c_str());
-    return env->NewStringUTF(result.c_str());
+    // Sanitize UTF-8 to prevent JNI crash on invalid bytes
+    std::string sanitized = sanitize_utf8(result.c_str(), result.length());
+    
+    LOGI("Generated text: %s", sanitized.c_str());
+    return env->NewStringUTF(sanitized.c_str());
 }
 
 // Global callback for streaming
@@ -262,8 +353,11 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
             break;
         }
         
-        // Call Kotlin callback with token
-        jstring token_jstring = env->NewStringUTF(token_str);
+        // Sanitize UTF-8 to prevent JNI crash on invalid bytes
+        std::string sanitized = sanitize_utf8(token_str, token_len);
+        
+        // Call Kotlin callback with sanitized token
+        jstring token_jstring = env->NewStringUTF(sanitized.c_str());
         env->CallVoidMethod(g_callback_object, g_callback_method, token_jstring);
         env->DeleteLocalRef(token_jstring);
         
