@@ -1,12 +1,12 @@
-package com.axiom.ui
+package com.axiom.android.sdk.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.axiom.core.ModelManager
-import com.axiom.ui.components.AxiomBottomNavigationBar
-import com.axiom.ui.components.MyModelsBottomSheet
-import com.axiom.ui.model.ModelUIItem
-import com.axiom.ui.viewmodel.BottomNavItem
+import com.axiom.android.sdk.ui.components.AxiomBottomNavigationBar
+import com.axiom.android.sdk.ui.components.MyModelsBottomSheet
+import com.axiom.android.sdk.domain.ModelUIItem
+import com.axiom.android.sdk.viewmodel.BottomNavItem
 
 /**
  * Main entry point for Axiom UI components.

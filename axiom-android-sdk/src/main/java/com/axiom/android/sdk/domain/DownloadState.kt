@@ -1,5 +1,23 @@
-package com.axiom.ui.model
+package com.axiom.android.sdk.domain
 
+/**
+ * Download state for the domain layer (used by ModelManagerWrapper)
+ */
+sealed class DownloadState {
+    object Idle : DownloadState()
+    data class Downloading(
+        val progress: Float,
+        val downloadedBytes: Long,
+        val totalBytes: Long
+    ) : DownloadState()
+    object Paused : DownloadState()
+    data class Completed(val downloadedPath: String) : DownloadState()
+    data class Failed(val error: String) : DownloadState()
+}
+
+/**
+ * Download state for UI layer (used by ModelUIItem)
+ */
 sealed class ModelDownloadState {
     data object NotStarted : ModelDownloadState()
     data class Downloading(

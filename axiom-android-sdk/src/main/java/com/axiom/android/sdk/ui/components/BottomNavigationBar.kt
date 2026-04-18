@@ -1,4 +1,4 @@
-package com.axiom.ui.components
+package com.axiom.android.sdk.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -17,7 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.axiom.ui.viewmodel.BottomNavItem
+import com.axiom.android.sdk.viewmodel.BottomNavItem
 
 @Composable
 fun AxiomBottomNavigationBar(

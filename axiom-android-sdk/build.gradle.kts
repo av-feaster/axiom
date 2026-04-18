@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.axiom.ui"
+    namespace = "com.axiom.android.sdk"
     compileSdk = 35
 
     defaultConfig {

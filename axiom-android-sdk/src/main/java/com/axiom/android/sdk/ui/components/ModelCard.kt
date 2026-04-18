@@ -1,4 +1,4 @@
-package com.axiom.ui.components
+package com.axiom.android.sdk.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -15,8 +15,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.axiom.ui.model.ModelDownloadState
-import com.axiom.ui.model.ModelUIItem
+import com.axiom.android.sdk.domain.ModelDownloadState
+import com.axiom.android.sdk.domain.ModelUIItem
 
 @Composable
 fun ModelCard(

@@ -43,10 +43,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":axiom-core"))
-    implementation(project(":axiom-llama-cpp"))
-    implementation(project(":axiom-models"))
-    implementation(project(":axiom-ui"))
+    implementation(project(":axiom-android-sdk"))
     
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
