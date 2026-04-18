@@ -26,6 +26,11 @@ import com.axiom.core.Model
 import com.axiom.core.ModelManager
 import com.axiom.llama.cpp.LlamaCppEngine
 import com.axiom.models.DefaultModelManager
+import com.axiom.ui.AxiomUI
+import com.axiom.ui.model.ModelDownloadState
+import com.axiom.ui.model.ModelUIItem
+import com.axiom.ui.viewmodel.BottomNavItem
+import com.axiom.ui.viewmodel.ModelManagementViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -44,6 +49,7 @@ class MainActivity : ComponentActivity() {
     
     private val engine: LLMEngine = LlamaCppEngine()
     private val modelManager: ModelManager by lazy { DefaultModelManager(this) }
+    private val modelUIViewModel by lazy { ModelManagementViewModel(modelManager) }
     
     private var isInitialized = false
     private var currentPrompt by mutableStateOf("")
@@ -54,9 +60,12 @@ class MainActivity : ComponentActivity() {
     private var statusMessage by mutableStateOf("Axiom AI SDK Sample")
     private var useStreaming by mutableStateOf(false)
     private var availableModels by mutableStateOf<List<Model>>(emptyList())
+    private var modelUIItems by mutableStateOf<List<ModelUIItem>>(emptyList())
     private var isNetworkConnected by mutableStateOf(true)
     private var snackbarMessage by mutableStateOf<String?>(null)
     private var snackbarColor by mutableStateOf(Color.Red)
+    private var showMyModelsSheet by mutableStateOf(false)
+    private var selectedBottomTab by mutableStateOf(BottomNavItem.MyModels)
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,7 +139,14 @@ class MainActivity : ComponentActivity() {
                             streamingText = ""
                         },
                         snackbarMessage = snackbarMessage,
-                        snackbarColor = snackbarColor
+                        snackbarColor = snackbarColor,
+                        onShowMyModels = { showMyModelsSheet = true },
+                        selectedBottomTab = selectedBottomTab,
+                        onTabSelected = { selectedBottomTab = it },
+                        modelUIItems = modelUIItems,
+                        onModelDownload = { modelId -> 
+                            // TODO: Handle model download
+                        }
                     )
                 }
             }
@@ -139,6 +155,16 @@ class MainActivity : ComponentActivity() {
         // Fetch available models
         lifecycleScope.launch {
             availableModels = modelManager.fetchRegistry()
+            modelUIItems = availableModels.map { model ->
+                ModelUIItem(
+                    id = model.id,
+                    name = model.name,
+                    description = model.description,
+                    size = formatSize(model.size),
+                    version = "1.0",
+                    downloadState = ModelDownloadState.NotStarted
+                )
+            }
         }
     }
 
@@ -297,10 +323,16 @@ fun SampleAppUI(
     onGenerate: () -> Unit,
     onClear: () -> Unit,
     snackbarMessage: String?,
-    snackbarColor: androidx.compose.ui.graphics.Color
+    snackbarColor: androidx.compose.ui.graphics.Color,
+    onShowMyModels: () -> Unit,
+    selectedBottomTab: BottomNavItem,
+    onTabSelected: (BottomNavItem) -> Unit,
+    modelUIItems: List<ModelUIItem>,
+    onModelDownload: (String) -> Unit
 ) {
     var selectedModel by remember { mutableStateOf<Model?>(null) }
     var showModelDialog by remember { mutableStateOf(false) }
+    var showMyModelsBottomSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     
     LaunchedEffect(snackbarMessage) {
@@ -320,6 +352,12 @@ fun SampleAppUI(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 )
+            )
+        },
+        bottomBar = {
+            AxiomUI.BottomNavigation(
+                selectedItem = selectedBottomTab,
+                onItemSelected = onTabSelected
             )
         },
         snackbarHost = {
@@ -386,6 +424,13 @@ fun SampleAppUI(
                     enabled = availableModels.isNotEmpty()
                 ) {
                     Text("Select Model")
+                }
+                
+                Button(
+                    onClick = { showMyModelsBottomSheet = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("My Models (New UI)")
                 }
                 
                 if (selectedModel != null) {
@@ -545,6 +590,16 @@ fun SampleAppUI(
                     Text("Cancel")
                 }
             }
+        )
+    }
+    
+    if (showMyModelsBottomSheet) {
+        AxiomUI.MyModelsSheet(
+            models = modelUIItems,
+            onImportLocalModel = { /* TODO */ },
+            onOptimizeStorage = { /* TODO */ },
+            onModelPauseResume = onModelDownload,
+            onDismiss = { showMyModelsBottomSheet = false }
         )
     }
 }

@@ -13,13 +13,14 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
-        // Modern NDK configuration
-        ndkVersion = "26.1.10909125"
+        // NDK r27+ required for 16 KB page-size ELF alignment (Play / device checks).
+        ndkVersion = "27.0.12077973"
         
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
                 arguments += "-DANDROID_STL=c++_shared"
+                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
                 abiFilters += "arm64-v8a"
             }
         }
@@ -51,6 +52,7 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    ndkVersion = "26.1.10909125"
 
 
 }
