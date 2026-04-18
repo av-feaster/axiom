@@ -39,3 +39,6 @@ Thumbs.db
 *.bak
 *.tmp
 *.temp
+.idea/
+.vscode/
+.git/cursor/
