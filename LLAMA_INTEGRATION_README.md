@@ -19,7 +19,27 @@ app/src/main/
     └── PromptBuilder.kt            # Prompt utilities
 ```
 
-## 🚀 Usage Example
+## � Model Download
+
+The model file is not included in the repository due to its size. To run the demo:
+
+1. **Download TinyLlama 1.1B (Q4_K_M)**:
+   ```bash
+   wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+   ```
+
+2. **Add to app assets**:
+   ```bash
+   mkdir -p app/src/main/assets/models
+   cp tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf app/src/main/assets/models/tinyllama.gguf
+   ```
+
+3. **Rebuild the app**:
+   ```bash
+   ./gradlew assembleDebug
+   ```
+
+## �🚀 Usage Example
 
 ```kotlin
 // Initialize the engine

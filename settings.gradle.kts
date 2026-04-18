@@ -24,7 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Axiom"
 include(":app")
-include(":sample")
-include(":axiom-core")
-include(":axiom-llama-cpp")
-include(":axiom-models")
+ 
