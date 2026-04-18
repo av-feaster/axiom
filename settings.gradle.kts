@@ -24,4 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Axiom"
 include(":app")
- 
+include(":sample")

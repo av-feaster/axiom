@@ -1,193 +1,169 @@
-# Axiom AI - On-Device AI Runtime for Android
+# Llama.cpp Android SDK
 
-> Run ChatGPT-like features **fully offline** on Android in minutes.
-> No APIs. No cloud. No data leakage.
+A production-ready Android SDK (AAR) for on-device LLM inference using llama.cpp. This SDK provides a clean Kotlin API for running LLM models directly on Android devices without requiring cloud services.
 
----
+## 📦 SDK Information
 
-## ✨ Why Axiom AI?
+- **AAR File**: `app/build/outputs/aar/app-release.aar`
+- **Size**: ~658MB (includes llama.cpp native libraries)
+- **Architecture**: arm64-v8a only (optimized for modern Android devices)
+- **Min SDK**: 24 (Android 7.0)
+- **Compile SDK**: 36 (Android 14)
 
-Most AI SDKs require:
+## 🚀 Quick Start
 
-* ❌ Cloud APIs
-* ❌ Latency
-* ❌ Privacy tradeoffs
-* ❌ Expensive scaling
+### 1. Add the AAR to your project
 
-**Axiom AI flips that:**
+Copy `app-release.aar` to your project's `libs` directory:
 
-* ✅ 100% on-device inference (powered by llama.cpp)
-* ✅ Offline-first (works in airplane mode)
-* ✅ Kotlin-first clean API
-* ✅ Play Store–safe model delivery
-* ✅ Production-ready architecture
+```bash
+mkdir -p app/libs
+cp app-release.aar app/libs/
+```
 
----
-
-## 📦 What You Get
-
-* 🧠 Local LLM inference (GGUF models)
-* ⚡ Streaming text generation
-* 📥 Built-in model download manager
-* 🧩 Modular architecture
-* 📱 Android-optimized performance
-
----
-
-## 🎥 Demo
-
-> Offline AI running on a real Android device (no internet)
-
-*Add demo GIF/video here*
-
----
-
-## ⚡ Quick Start (1 Minute)
-
-### 1. Add dependencies
+### 2. Add to your app's build.gradle.kts
 
 ```kotlin
 dependencies {
-    implementation("com.axiom:axiom-core:0.1.0")
-    implementation("com.axiom:axiom-llama-cpp:0.1.0")
-    implementation("com.axiom:axiom-models:0.1.0")
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
 }
 ```
 
----
+### 3. Add model to assets
 
-### 2. Initialize engine
-
-```kotlin
-val engine = LlamaCppEngine()
-val modelManager = DefaultModelManager(context)
-
-// Get recommended model
-val model = modelManager.recommend(context)
-
-// Download if needed
-val modelPath = modelManager.download(model) { progress ->
-    Log.d("Axiom", "Downloading: $progress")
-}
-
-// Initialize engine
-engine.init(LLMConfig(
-    modelPath = modelPath,
-    contextSize = 1024,
-    temperature = 0.7f,
-    topK = 40
-))
-```
-
----
-
-### Alternative: Manual Model Setup
-
-For the sample app, you can manually download and add a model:
+The model file is not included in the repository due to its size. To run the demo:
 
 1. **Download TinyLlama 1.1B (Q4_K_M)**:
    ```bash
    wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
    ```
 
-2. **Add to sample app assets**:
+2. **Add to app assets**:
    ```bash
-   mkdir -p sample/src/main/assets/models
-   cp tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf sample/src/main/assets/models/tinyllama.gguf
+   mkdir -p app/src/main/assets/models
+   cp tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf app/src/main/assets/models/tinyllama.gguf
    ```
 
-3. **Rebuild sample app**:
-   ```bash
-   ./gradlew :sample:assembleDebug
-   ```
-
----
-
-### 3. Generate text (streaming)
+### 4. Use the SDK in your code
 
 ```kotlin
-engine.stream("Explain Android in simple terms") { token ->
-    print(token)
+import com.toonandtools.axiom.llama.LlamaEngine
+import com.toonandtools.axiom.llama.ModelLoader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+class MyViewModel : ViewModel() {
+    suspend fun initLlama(context: Context): Boolean = withContext(Dispatchers.IO) {
+        // Copy model from assets to files directory
+        val modelPath = ModelLoader.copyModelToFilesDir(context, "your-model.gguf")
+        
+        // Initialize the engine
+        LlamaEngine.init(context, modelPath.absolutePath)
+    }
+    
+    suspend fun generateText(prompt: String): String = withContext(Dispatchers.IO) {
+        LlamaEngine.generate(prompt)
+    }
+    
+    fun cleanup() {
+        LlamaEngine.cleanup()
+    }
 }
 ```
 
-## 🧠 Architecture
+## 📚 API Reference
 
-```
-axiom-core         → SDK interfaces + config
-axiom-llama-cpp    → llama.cpp engine binding
-axiom-models       → model manager + downloader
-sample-app         → demo implementation
-```
+### LlamaEngine
 
----
-
-## 📥 Model Delivery (Play Store Safe)
-
-Axiom does **NOT bundle models in APK**.
-
-Instead:
-
-* Models are fetched from a remote registry
-* Downloaded via Android DownloadManager
-* Stored in app-private storage
-* Verified via checksum
-
-✅ No APK bloat
-✅ No policy violations
-✅ Resumable downloads
-
----
-
-## 📚 Supported Models
-
-| Model            | Size   | RAM   | Speed                    |
-| ---------------- | ------ | ----- | ------------------------ |
-| TinyLlama 1.1B   | ~500MB | 3–4GB | ⚡ Fast                   |
-| TinyMistral 0.2B | ~130MB | 2–3GB | ⚡⚡ Very Fast             |
-| Mistral 7B       | ~4GB   | 6–8GB | 🐢 Slow but high quality |
-
----
-
-## 🧩 API Overview
-
-### Engine
+Main entry point for llama.cpp operations.
 
 ```kotlin
-interface LLMEngine {
-    suspend fun init(config: LLMConfig): Boolean
+object LlamaEngine {
+    /**
+     * Initialize the llama.cpp engine with a model
+     * @param context Application context
+     * @param modelPath Absolute path to the GGUF model file
+     * @return true if initialization succeeded, false otherwise
+     */
+    suspend fun init(context: Context, modelPath: String): Boolean
+    
+    /**
+     * Generate text from a prompt
+     * @param prompt Input text prompt
+     * @return Generated text response
+     */
     suspend fun generate(prompt: String): String
-    suspend fun stream(prompt: String, onToken: (String) -> Unit)
+    
+    /**
+     * Cleanup and release resources
+     */
     fun cleanup()
 }
 ```
 
----
+### ModelLoader
 
-### Config
+Utility for managing model files.
 
 ```kotlin
-data class LLMConfig(
-    val modelPath: String,
-    val contextSize: Int = 1024,
-    val temperature: Float = 0.7f,
-    val topK: Int = 40,
-    val threads: Int = Runtime.getRuntime().availableProcessors()
-)
+object ModelLoader {
+    /**
+     * Copy a model from assets to the app's files directory
+     * @param context Application context
+     * @param assetName Name of the model file in assets
+     * @return File object pointing to the copied model
+     */
+    suspend fun copyModelToFilesDir(context: Context, assetName: String): File
+    
+    /**
+     * Check if a model file exists in the files directory
+     * @param context Application context
+     * @param fileName Name of the model file
+     * @return true if the model exists
+     */
+    fun modelExists(context: Context, fileName: String): Boolean
+    
+    /**
+     * Get the file path for a model in the files directory
+     * @param context Application context
+     * @param fileName Name of the model file
+     * @return File object pointing to the model
+     */
+    fun getModelPath(context: Context, fileName: String): File
+}
 ```
 
----
+### PromptBuilder
 
-### Model Manager
+Utility for formatting prompts.
 
 ```kotlin
-ModelManager.fetchRegistry()
-
-ModelManager.download(model) { progress -> }
-
-ModelManager.getInstalledModels()
-
-ModelManager.delete(model)
+object PromptBuilder {
+    /**
+     * Build a simple prompt
+     * @param instruction The instruction for the model
+     * @return Formatted prompt string
+     */
+    fun buildPrompt(instruction: String): String
+    
+    /**
+     * Build a prompt with context
+     * @param context Additional context for the model
+     * @param instruction The instruction for the model
+     * @return Formatted prompt string
+     */
+    fun buildPromptWithContext(context: String, instruction: String): String
+    
+    /**
+     * Build a chat-style prompt
+     * @param conversation List of (user, assistant) message pairs
+     * @return Formatted chat prompt
+     */
+    fun buildChatPrompt(conversation: List<Pair<String, String>>): String
+}
 ```
 
 ## 🔧 Configuration
@@ -307,96 +283,69 @@ fun LlamaScreen() {
 - `LlamaEngine.init()` and `LlamaEngine.generate()` are thread-safe when called from coroutines
 - `LlamaEngine.cleanup()` should be called from the main thread or with proper synchronization
 
----
+### Lifecycle Management
 
-## ⚙️ Performance Tips
+- Always call `LlamaEngine.cleanup()` when done to release native resources
+- Initialize the engine only once per application lifecycle
+- Consider initializing in Application class or a singleton
 
-* Use **Q4_K_M quantization**
-* Keep context ≤ 1024 for mobile
-* Prefer small models for UX
-* Avoid frequent init/cleanup
+### Model Loading
 
----
+- Models are copied from assets to files directory on first use
+- This can take time for large models, consider doing it in a coroutine
+- Models persist in files directory after initial copy
 
-## 🔐 Privacy
+### Performance Considerations
 
-* All inference runs locally
-* No data leaves device
-* No API calls
+- First generation after initialization may be slower
+- Subsequent generations are faster with warm cache
+- Consider keeping the engine initialized for repeated use
+- Avoid frequent init/cleanup cycles
 
----
+## 🔍 Troubleshooting
 
-## 🛣 Roadmap
+### Build Issues
 
-### v0.2
+If you encounter build errors when adding the AAR:
 
-* [ ] Streaming API improvements
-* [ ] Model auto-selection
+1. Ensure you have the required dependencies (kotlinx-coroutines, androidx.core, androidx.lifecycle)
+2. Make sure your project uses Kotlin 2.0.21 or higher
+3. Verify your project's compile SDK is at least 36
 
-### v0.3
+### Runtime Issues
 
-* [ ] GPU / NNAPI acceleration
-* [ ] Background downloads
+**"Failed to load model"**
+- Verify the model file is a valid GGUF format
+- Check the model file path is correct
+- Ensure you have sufficient storage space
 
-### v1.0
+**"Failed to generate text"**
+- Check if the prompt is valid
+- Verify the model was initialized successfully
+- Check Android logcat for detailed error messages
 
-* [ ] Stable SDK
-* [ ] Production benchmarks
-* [ ] UI components (ChatKit)
+**Out of Memory**
+- Try a smaller model (more quantization)
+- Reduce context size in llama_jni.cpp
+- Close other apps to free memory
 
----
+## 📝 License
+
+This SDK includes llama.cpp which is licensed under the MIT License. The SDK wrapper code is also provided under the MIT License.
 
 ## 🤝 Contributing
 
-We welcome contributions!
+To modify or extend this SDK:
 
-### Good first issues:
+1. Clone this repository
+2. Modify the Kotlin API in `app/src/main/java/com/toonandtools/axiom/llama/`
+3. Modify the JNI layer in `app/src/main/cpp/llama_jni.cpp`
+4. Rebuild the AAR: `./gradlew assembleRelease`
+5. The new AAR will be in `app/build/outputs/aar/app-release.aar`
 
-* Add new model configs
-* Improve streaming API
-* Optimize memory usage
-* Enhance sample app UI
+## 📞 Support
 
-### Setup
-
-```bash
-git clone https://github.com/your-org/axiom-ai
-cd axiom-ai
-./gradlew build
-```
-
----
-
-## � License
-
-MIT License
-
----
-
-## 💬 Vision
-
-Axiom AI aims to become:
-
-> **"Firebase for on-device AI"**
-
----
-
-## ⭐ Support
-
-If this project helps you:
-
-* ⭐ Star the repo
-* 🧵 Share on Twitter / Reddit
-* 🧪 Build something cool
-
----
-
-## 🧠 Final Thought
-
-The future of AI is not just in the cloud.
-
-It's **on your device**.
-
----
-
-Made with ❤️ for indie developers
+For issues or questions:
+- Check the llama.cpp documentation: https://github.com/ggerganov/llama.cpp
+- Review this SDK's source code for implementation details
+- Check Android logcat for runtime errors

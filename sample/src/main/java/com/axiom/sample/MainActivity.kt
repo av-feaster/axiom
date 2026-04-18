@@ -12,29 +12,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import com.axiom.core.LLMConfig
-import com.axiom.core.LLMEngine
-import com.axiom.core.Model
-import com.axiom.core.ModelManager
-import com.axiom.llama.cpp.LlamaCppEngine
-import com.axiom.models.DefaultModelManager
+import com.toonandtools.axiom.llama.LlamaEngine
+import com.toonandtools.axiom.llama.ModelLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
-    private val engine: LLMEngine = LlamaCppEngine()
-    private val modelManager: ModelManager = DefaultModelManager(this)
-    
     private var isInitialized = false
     private var currentPrompt by mutableStateOf("")
     private var generatedText by mutableStateOf("")
-    private var streamingText by mutableStateOf("")
     private var isLoading by mutableStateOf(false)
     private var errorMessage by mutableStateOf("")
-    private var statusMessage by mutableStateOf("Axiom AI SDK Sample")
-    private var useStreaming by mutableStateOf(false)
-    private var availableModels by mutableStateOf<List<Model>>(emptyList())
+    private var statusMessage by mutableStateOf("Not initialized")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,57 +39,45 @@ class MainActivity : ComponentActivity() {
                         currentPrompt = currentPrompt,
                         onPromptChange = { currentPrompt = it },
                         generatedText = generatedText,
-                        streamingText = streamingText,
                         isLoading = isLoading,
                         errorMessage = errorMessage,
                         statusMessage = statusMessage,
-                        useStreaming = useStreaming,
-                        onStreamingToggle = { useStreaming = it },
-                        availableModels = availableModels,
-                        onInitialize = { initializeEngine(it) },
+                        onInitialize = { initializeEngine() },
                         onGenerate = { generateText() },
-                        onClear = { 
-                            generatedText = ""
-                            streamingText = ""
-                        }
+                        onClear = { generatedText = "" }
                     )
                 }
             }
         }
-        
-        // Fetch available models
-        lifecycleScope.launch {
-            availableModels = modelManager.fetchRegistry()
-        }
     }
 
-    private fun initializeEngine(modelPath: String) {
+    private fun initializeEngine() {
         isLoading = true
         errorMessage = ""
-        statusMessage = "Initializing Axiom AI engine..."
+        statusMessage = "Initializing..."
         
         lifecycleScope.launch {
             try {
-                val config = LLMConfig(
-                    modelPath = modelPath,
-                    contextSize = 1024,
-                    temperature = 0.7f,
-                    topK = 40,
-                    topP = 0.95f,
-                    repeatPenalty = 1.0f,
-                    maxTokens = 512
-                )
-                
                 val success = withContext(Dispatchers.IO) {
-                    engine.init(config)
+                    // Copy model from assets if it exists
+                    val modelPath = try {
+                        ModelLoader.copyModelToFilesDir(this@MainActivity, "tinyllama.gguf")
+                    } catch (e: Exception) {
+                        statusMessage = "Model file not found in assets. Please add a GGUF model to sample/src/main/assets/models/"
+                        errorMessage = "Model file not found: ${e.message}"
+                        isLoading = false
+                        return@withContext false
+                    }
+                    
+                    LlamaEngine.init(this@MainActivity, modelPath.absolutePath)
                 }
                 
                 if (success) {
                     isInitialized = true
-                    statusMessage = "Axiom AI Ready - Model loaded successfully"
+                    statusMessage = "Ready - Model loaded successfully"
                 } else {
                     statusMessage = "Initialization failed"
-                    errorMessage = "Failed to initialize Axiom AI engine"
+                    errorMessage = "Failed to initialize llama.cpp engine"
                 }
             } catch (e: Exception) {
                 statusMessage = "Error during initialization"
@@ -116,24 +94,14 @@ class MainActivity : ComponentActivity() {
         isLoading = true
         errorMessage = ""
         statusMessage = "Generating..."
-        generatedText = ""
-        streamingText = ""
         
         lifecycleScope.launch {
             try {
-                if (useStreaming) {
-                    engine.stream(currentPrompt) { token ->
-                        streamingText += token
-                    }
-                    generatedText = streamingText
-                    statusMessage = "Streaming complete"
-                } else {
-                    val result = withContext(Dispatchers.IO) {
-                        engine.generate(currentPrompt)
-                    }
-                    generatedText = result
-                    statusMessage = "Generation complete"
+                val result = withContext(Dispatchers.IO) {
+                    LlamaEngine.generate(currentPrompt)
                 }
+                generatedText = result
+                statusMessage = "Generation complete"
             } catch (e: Exception) {
                 statusMessage = "Error during generation"
                 errorMessage = "Error: ${e.message}"
@@ -146,7 +114,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (isInitialized) {
-            engine.cleanup()
+            LlamaEngine.cleanup()
         }
     }
 }
@@ -158,24 +126,17 @@ fun SampleAppUI(
     currentPrompt: String,
     onPromptChange: (String) -> Unit,
     generatedText: String,
-    streamingText: String,
     isLoading: Boolean,
     errorMessage: String,
     statusMessage: String,
-    useStreaming: Boolean,
-    onStreamingToggle: (Boolean) -> Unit,
-    availableModels: List<Model>,
-    onInitialize: (String) -> Unit,
+    onInitialize: () -> Unit,
     onGenerate: () -> Unit,
     onClear: () -> Unit
 ) {
-    var selectedModel by remember { mutableStateOf<String?>(null) }
-    var showModelDialog by remember { mutableStateOf(false) }
-    
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Axiom AI SDK Sample") },
+                title = { Text("Llama.cpp SDK Sample") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -226,46 +187,19 @@ fun SampleAppUI(
                 }
             }
 
-            // Model Selection
-            if (!isInitialized) {
-                Button(
-                    onClick = { showModelDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = availableModels.isNotEmpty()
-                ) {
-                    Text("Select Model")
-                }
-                
-                if (selectedModel != null) {
-                    Button(
-                        onClick = { onInitialize(selectedModel!!) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                        } else {
-                            Text("Initialize Engine")
-                        }
-                    }
-                }
-            }
-
-            // Streaming Toggle
-            if (isInitialized) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Use Streaming")
-                    Switch(
-                        checked = useStreaming,
-                        onCheckedChange = onStreamingToggle
+            // Initialize Button
+            Button(
+                onClick = onInitialize,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isInitialized && !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.onPrimary
                     )
+                } else {
+                    Text("Initialize Engine")
                 }
             }
 
@@ -293,12 +227,12 @@ fun SampleAppUI(
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                     } else {
-                        Text(if (useStreaming) "Stream Text" else "Generate Text")
+                        Text("Generate Text")
                     }
                 }
 
                 // Generated Output
-                if (generatedText.isNotEmpty() || streamingText.isNotEmpty()) {
+                if (generatedText.isNotEmpty()) {
                     Card(
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -311,7 +245,7 @@ fun SampleAppUI(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    if (useStreaming) "Streaming Output" else "Generated Output",
+                                    "Generated Output",
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 TextButton(onClick = onClear) {
@@ -320,7 +254,7 @@ fun SampleAppUI(
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = if (useStreaming) streamingText else generatedText,
+                                text = generatedText,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -340,55 +274,27 @@ fun SampleAppUI(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        "Axiom AI SDK Features:",
+                        "Instructions:",
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        "• Modular architecture (core, llama-cpp, models)",
+                        "1. Add a GGUF model file to sample/src/main/assets/models/",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
-                        "• Streaming text generation",
+                        "2. Rename it to 'tinyllama.gguf' or update the code",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
-                        "• Model download manager",
+                        "3. Click 'Initialize Engine' to load the model",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
-                        "• Configurable generation parameters",
+                        "4. Enter a prompt and click 'Generate Text'",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
             }
         }
-    }
-    
-    if (showModelDialog) {
-        AlertDialog(
-            onDismissRequest = { showModelDialog = false },
-            title = { Text("Select Model") },
-            text = {
-                Column {
-                    availableModels.forEach { model ->
-                        Button(
-                            onClick = {
-                                selectedModel = model.downloadUrl // In real app, this would be local path
-                                showModelDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("${model.name} (${model.size / (1024 * 1024)}MB)")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showModelDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 }
