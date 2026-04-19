@@ -434,6 +434,12 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         // Sanitize UTF-8 to prevent JNI crash on invalid bytes
         std::string sanitized = sanitize_utf8(token_str, token_len);
         
+        // Check for cancellation before callback
+        if (g_cancel_generation) {
+            LOGI("Streaming cancelled by user (before callback)");
+            break;
+        }
+        
         // Call Kotlin callback with sanitized token
         jstring token_jstring = env->NewStringUTF(sanitized.c_str());
         if (token_jstring == nullptr) {
@@ -506,6 +512,6 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeCleanup(JNIEnv* env, jobject /* th
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_axiom_llama_cpp_LlamaCppEngine_nativeCancel(JNIEnv* env, jobject /* this */) {
-    LOGI("Cancelling generation");
+    LOGI("Cancelling generation, setting g_cancel_generation to true");
     g_cancel_generation = true;
 }
