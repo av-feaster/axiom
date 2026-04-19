@@ -472,6 +472,8 @@ fun ChatScreen(
                                             android.util.Log.d("ChatScreen", "Starting generation for model: $modelId")
                                             android.util.Log.d("ChatScreen", "Context messages count: ${llmMessages.size}")
                                             android.util.Log.d("ChatScreen", "Engine class: ${engine::class.java.simpleName}")
+                                            android.util.Log.d("ChatScreen", "Full prompt length: ${fullPrompt.length} chars")
+                                            android.util.Log.d("ChatScreen", "Full prompt: \"$fullPrompt\"")
 
                                             // Check if model file exists
                                             val modelPath = "${context.filesDir.absolutePath}/models/$modelId.gguf"
@@ -486,6 +488,7 @@ fun ChatScreen(
                                             var tokenBuffer = "" // Buffer for suspicious tokens
                                             var bufferIsSuspicious = false // Flag to track if buffer contains suspicious tokens
 
+                                            android.util.Log.d("ChatScreen", "About to call engine.generate()...")
                                             try {
                                                 engine.generate(fullPrompt).collect { token ->
                                                     val currentTime = System.currentTimeMillis()

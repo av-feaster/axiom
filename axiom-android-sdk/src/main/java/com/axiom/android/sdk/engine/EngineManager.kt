@@ -1,6 +1,7 @@
 package com.axiom.android.sdk.engine
 
 import android.app.Application
+import android.util.Log
 import com.axiom.android.sdk.AxiomSDKConfig
 import com.axiom.android.sdk.AxiomState
 import com.axiom.android.sdk.AxiomStateStore
@@ -65,21 +66,32 @@ object EngineManager : AxiomEngine {
      * @return Flow of generated text tokens
      */
     override fun generate(prompt: String): Flow<String> = callbackFlow {
+        android.util.Log.d("EngineManager", "generate() called, isInitialized=$isInitialized")
         if (!isInitialized) {
+            android.util.Log.e("EngineManager", "Engine not initialized, closing flow")
             close(IllegalStateException("Engine not initialized. Call initialize() first."))
             return@callbackFlow
         }
         
         isGenerating = true
         AxiomStateStore.setState(AxiomState.Generating)
+        android.util.Log.d("EngineManager", "Starting generation, prompt length: ${prompt.length}")
         
         currentGenerationJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             try {
+                android.util.Log.d("EngineManager", "Calling internalEngine.stream()")
+                var tokenCount = 0
                 internalEngine.stream(prompt) { token ->
+                    tokenCount++
+                    if (tokenCount % 10 == 0) {
+                        android.util.Log.d("EngineManager", "Streamed $tokenCount tokens")
+                    }
                     trySend(token)
                 }
+                android.util.Log.d("EngineManager", "Generation completed, total tokens: $tokenCount")
                 AxiomStateStore.setState(AxiomState.Ready)
             } catch (e: Exception) {
+                android.util.Log.e("EngineManager", "Generation failed", e)
                 AxiomStateStore.setState(AxiomState.Error(e.message ?: "Generation failed"))
                 close(e)
             } finally {
@@ -88,6 +100,7 @@ object EngineManager : AxiomEngine {
         }
         
         awaitClose {
+            android.util.Log.d("EngineManager", "Flow closed, cancelling job")
             currentGenerationJob?.cancel()
             isGenerating = false
             AxiomStateStore.setState(AxiomState.Ready)
