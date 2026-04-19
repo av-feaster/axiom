@@ -339,10 +339,9 @@ fun ChatScreen(
                     )
                 }
             }
-        }
-
-        // Composer: IME padding here lifts the field above the keyboard without hollowing the list area.
-        Column(
+            
+            // Composer: IME padding here lifts the field above the keyboard without hollowing the list area.
+            Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
@@ -832,7 +831,7 @@ fun ChatScreen(
 }
 
 /** Shimmer drawn over assistant text while [ChatMessage.isStreaming] is true. */
-private fun Modifier.assistantStreamingShimmer(enabled: Boolean): Modifier =
+fun Modifier.assistantStreamingShimmer(enabled: Boolean): Modifier =
     composed {
         if (!enabled) return@composed Modifier
         val transition = rememberInfiniteTransition(label = "assistantStreamShimmer")
@@ -1013,4 +1012,5 @@ fun ChatMessageItem(
             }
         }
     }
+}
 }
