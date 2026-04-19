@@ -27,11 +27,9 @@ import android.net.NetworkRequest
 import androidx.annotation.RequiresPermission
 import com.axiom.android.sdk.AxiomSDK
 import com.axiom.android.sdk.AxiomSDKConfig
+import com.axiom.android.sdk.AxiomMode
 import com.axiom.android.sdk.ui.theme.AxiomTheme as AxiomUiTheme
 import com.axiom.android.sdk.ui.AxiomBottomSheet
-import com.axiom.android.sdk.ui.components.MyModelsBottomSheet
-import com.axiom.android.sdk.domain.ModelUIItem
-import com.axiom.android.sdk.domain.ModelDownloadState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -45,8 +43,6 @@ class MainActivity : ComponentActivity() {
     private var isNetworkConnected by mutableStateOf(true)
     private var snackbarMessage by mutableStateOf<String?>(null)
     private var snackbarColor by mutableStateOf(Color.Red)
-    private var showAspectsBottomSheet by mutableStateOf(false)
-    private var modelUIItems by mutableStateOf<List<ModelUIItem>>(emptyList())
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,39 +58,12 @@ class MainActivity : ComponentActivity() {
                 application = application,
                 config = AxiomSDKConfig(
                     context = this,
+                    mode = AxiomMode.Managed,
                     enableLogging = true
                 )
             )
             Log.i(TAG, "AxiomSDK initialized successfully")
             statusMessage = "Axiom SDK Initialized Successfully"
-            
-            // Initialize mock model data
-            modelUIItems = listOf(
-                ModelUIItem(
-                    id = "llama-3-8b",
-                    name = "Llama 3 8B",
-                    description = "General purpose language model",
-                    size = "4.7 GB",
-                    version = "1.0",
-                    downloadState = ModelDownloadState.Installed
-                ),
-                ModelUIItem(
-                    id = "mistral-7b",
-                    name = "Mistral 7B",
-                    description = "High-performance language model",
-                    size = "4.1 GB",
-                    version = "1.0",
-                    downloadState = ModelDownloadState.NotStarted
-                ),
-                ModelUIItem(
-                    id = "gemma-7b",
-                    name = "Gemma 7B",
-                    description = "Google's open language model",
-                    size = "5.2 GB",
-                    version = "1.0",
-                    downloadState = ModelDownloadState.Downloading(0.35f, "2.4 MB/s", 1820000000L, 5200000000L)
-                )
-            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize AxiomSDK", e)
             statusMessage = "SDK Initialization Failed: ${e.message}"
@@ -107,23 +76,7 @@ class MainActivity : ComponentActivity() {
                     color = AxiomUiTheme.colors.background
                 ) {
                     SampleAppUI(
-                        statusMessage = statusMessage,
-                        showAspectsBottomSheet = showAspectsBottomSheet,
-                        onAspectsBottomSheetShow = { showAspectsBottomSheet = true },
-                        onAspectsBottomSheetDismiss = { showAspectsBottomSheet = false },
-                        modelUIItems = modelUIItems,
-                        onModelDownload = { modelId -> 
-                            // Handle model download/pause/resume
-                            Log.i(TAG, "Model action: $modelId")
-                        },
-                        onImportLocalModel = {
-                            // Handle import local model
-                            Log.i(TAG, "Import local model")
-                        },
-                        onOptimizeStorage = {
-                            // Handle optimize storage
-                            Log.i(TAG, "Optimize storage")
-                        }
+                        statusMessage = statusMessage
                     )
                 }
             }
@@ -134,14 +87,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SampleAppUI(
-    statusMessage: String,
-    showAspectsBottomSheet: Boolean,
-    onAspectsBottomSheetShow: () -> Unit,
-    onAspectsBottomSheetDismiss: () -> Unit,
-    modelUIItems: List<ModelUIItem>,
-    onModelDownload: (String) -> Unit,
-    onImportLocalModel: () -> Unit,
-    onOptimizeStorage: () -> Unit
+    statusMessage: String
 ) {
     Scaffold(
         topBar = {
@@ -152,17 +98,6 @@ fun SampleAppUI(
                     titleContentColor = AxiomUiTheme.colors.textPrimary
                 )
             )
-        },
-        floatingActionButton = {
-            if (!showAspectsBottomSheet) {
-                FloatingActionButton(
-                    onClick = onAspectsBottomSheetShow,
-                    containerColor = AxiomUiTheme.colors.primary,
-                    contentColor = AxiomUiTheme.colors.textPrimary
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Open Aspects")
-                }
-            }
         }
     ) { paddingValues ->
         val view = LocalView.current
@@ -185,14 +120,23 @@ fun SampleAppUI(
                     containerColor = AxiomUiTheme.colors.backgroundTertiary
                 )
             ) {
-                Text(
-                    text = statusMessage,
+                Column(
                     modifier = Modifier.padding(16.dp),
-                    style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
-                    color = AxiomUiTheme.colors.textPrimary
-                )
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "SDK Status",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AxiomUiTheme.colors.textPrimary
+                    )
+                    Text(
+                        text = statusMessage,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = AxiomUiTheme.colors.textSecondary
+                    )
+                }
             }
-
+            
             // Instructions
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -205,51 +149,20 @@ fun SampleAppUI(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        "Axiom AI SDK Sample",
-                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                        text = "Instructions",
+                        style = MaterialTheme.typography.titleMedium,
                         color = AxiomUiTheme.colors.textPrimary
                     )
                     Text(
-                        "This sample demonstrates the Axiom Android SDK integration.",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        color = AxiomUiTheme.colors.textSecondary
-                    )
-                    Text(
-                        "• Single dependency integration",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        color = AxiomUiTheme.colors.textSecondary
-                    )
-                    Text(
-                        "• ChatGPT-like bottom sheet UI",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        color = AxiomUiTheme.colors.textSecondary
-                    )
-                    Text(
-                        "• Local GGUF model execution",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                        color = AxiomUiTheme.colors.textSecondary
-                    )
-                    Text(
-                        "• Customizable design system",
-                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        text = "The AxiomBottomSheet is rendered automatically in Managed mode. Tap the floating pill at the bottom to interact with the SDK.",
+                        style = MaterialTheme.typography.bodySmall,
                         color = AxiomUiTheme.colors.textSecondary
                     )
                 }
             }
         }
-    }
-    
-    // Add AxiomBottomSheet for chat functionality
-    AxiomBottomSheet()
-    
-    // My Models Bottom Sheet
-    if (showAspectsBottomSheet) {
-        MyModelsBottomSheet(
-            models = modelUIItems,
-            onImportLocalModel = onImportLocalModel,
-            onOptimizeStorage = onOptimizeStorage,
-            onModelPauseResume = onModelDownload,
-            onDismiss = onAspectsBottomSheetDismiss
-        )
+        
+        // Add AxiomBottomSheet - single UI entry point
+        AxiomBottomSheet()
     }
 }

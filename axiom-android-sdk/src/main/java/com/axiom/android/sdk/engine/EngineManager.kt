@@ -1,7 +1,9 @@
 package com.axiom.android.sdk.engine
 
-import com.axiom.android.sdk.AxiomSDK
+import android.app.Application
+import com.axiom.android.sdk.AxiomSDKConfig
 import com.axiom.android.sdk.AxiomState
+import com.axiom.android.sdk.AxiomStateStore
 import com.axiom.core.LLMConfig
 import com.axiom.core.LLMEngine
 import com.axiom.llama.cpp.LlamaCppEngine
@@ -18,11 +20,28 @@ import kotlinx.coroutines.withContext
  * Wrapper implementation of AxiomEngine
  * Manages the internal LLMEngine and provides Flow-based streaming API
  */
-class EngineManager : AxiomEngine {
+object EngineManager : AxiomEngine {
     
     private val internalEngine: LLMEngine = LlamaCppEngine()
     private var currentGenerationJob: Job? = null
     private var isInitialized = false
+    private lateinit var config: AxiomSDKConfig
+    
+    /**
+     * Initialize the engine manager with application and config
+     * @param application Application context
+     * @param config SDK configuration
+     */
+    fun init(application: Application, config: AxiomSDKConfig) {
+        this.config = config
+        // Engine will be initialized when a model is loaded
+    }
+    
+    /**
+     * Get the singleton instance
+     * @return EngineManager instance
+     */
+    fun get(): EngineManager = this
     
     /**
      * Initialize the engine with configuration
@@ -32,6 +51,9 @@ class EngineManager : AxiomEngine {
     suspend fun initialize(config: LLMConfig): Boolean = withContext(Dispatchers.IO) {
         val result = internalEngine.init(config)
         isInitialized = result
+        if (result) {
+            AxiomStateStore.setState(AxiomState.Ready)
+        }
         result
     }
     
@@ -46,23 +68,23 @@ class EngineManager : AxiomEngine {
             return@callbackFlow
         }
         
-        AxiomSDK.updateState(AxiomState.Generating)
+        AxiomStateStore.setState(AxiomState.Generating)
         
         currentGenerationJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             try {
                 internalEngine.stream(prompt) { token ->
                     trySend(token)
                 }
-                AxiomSDK.updateState(AxiomState.Ready)
+                AxiomStateStore.setState(AxiomState.Ready)
             } catch (e: Exception) {
-                AxiomSDK.updateState(AxiomState.Error(e.message ?: "Generation failed"))
+                AxiomStateStore.setState(AxiomState.Error(e.message ?: "Generation failed"))
                 close(e)
             }
         }
         
         awaitClose {
             currentGenerationJob?.cancel()
-            AxiomSDK.updateState(AxiomState.Ready)
+            AxiomStateStore.setState(AxiomState.Ready)
         }
     }.flowOn(Dispatchers.IO)
     

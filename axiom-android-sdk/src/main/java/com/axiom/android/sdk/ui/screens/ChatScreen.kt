@@ -44,7 +44,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.axiom.android.sdk.AxiomSDK
 import com.axiom.android.sdk.engine.AxiomEngine
+import com.axiom.android.sdk.data.entity.ChatMessageEntity
+import com.axiom.android.sdk.data.repository.ChatSessionRepository
+import com.axiom.core.ChatMode
+import com.axiom.core.ContextBuilder
+import com.axiom.core.LLMMessage
 import com.axiom.core.StreamingSafeguard
+import com.axiom.android.sdk.ui.screens.EditMessageDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import androidx.compose.animation.core.LinearEasing
@@ -69,6 +75,8 @@ private const val SYSTEM_PROMPT = "You are a helpful AI assistant. Always respon
 @Composable
 fun ChatScreen(
     modelId: String,
+    sessionId: Long? = null,
+    repository: ChatSessionRepository? = null,
     onNavigateBack: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -78,10 +86,29 @@ fun ChatScreen(
     var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var currentInput by remember { mutableStateOf("") }
     var isGenerating by remember { mutableStateOf(false) }
+    var selectedMode by remember { mutableStateOf(ChatMode.GENERAL) }
+    var editingMessageIndex by remember { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
+    
+    // Load messages from database if sessionId is provided
+    LaunchedEffect(sessionId, repository) {
+        if (sessionId != null && repository != null) {
+            repository.getMessagesForSession(sessionId).collect { messageEntities ->
+                messages = messageEntities.map { entity ->
+                    ChatMessage(
+                        role = entity.role,
+                        content = entity.content,
+                        tokenCount = entity.tokenCount,
+                        generationTimeMs = entity.generationTimeMs,
+                        isStreaming = entity.isStreaming
+                    )
+                }
+            }
+        }
+    }
 
     // System instruction (hidden from UI, included in prompt)
-    val systemInstruction = "You are a helpful AI assistant. Always respond in English. Be concise, accurate, and friendly. Provide clear and helpful responses."
+    val systemInstruction = selectedMode.systemPrompt
     
     // Auto-scroll when new messages arrive
     LaunchedEffect(messages.size) {
@@ -183,6 +210,23 @@ fun ChatScreen(
             )
         )
 
+        // Chat mode selector
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ChatMode.values().forEach { mode ->
+                FilterChip(
+                    selected = selectedMode == mode,
+                    onClick = { selectedMode = mode },
+                    label = { Text(mode.displayName) },
+                    modifier = Modifier.height(32.dp)
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
         // Messages list
         LazyColumn(
@@ -205,11 +249,96 @@ fun ChatScreen(
             itemsIndexed(
                 items = messages,
                 key = { index, _ -> index },
-            ) { _, message ->
+            ) { index, message ->
                 ChatMessageItem(
                     message = message,
                     onRegenerate = {
-                        // TODO: Implement regenerate functionality
+                        if (message.role == "assistant" && !isGenerating) {
+                            // Regenerate this assistant message
+                            val messagesBefore = messages.take(index)
+                            val lastUserMessage = messagesBefore.lastOrNull { it.role == "user" }
+                            
+                            if (lastUserMessage != null) {
+                                isGenerating = true
+                                scope.launch {
+                                    try {
+                                        var assistantResponse = ""
+                                        val generationStartTime = System.currentTimeMillis()
+                                        
+                                        // Build conversation history using ContextBuilder
+                                        val historyMessages = messagesBefore.map { message ->
+                                            when (message.role) {
+                                                "user" -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                                                "assistant" -> LLMMessage(LLMMessage.MessageRole.ASSISTANT, message.content)
+                                                else -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                                            }
+                                        }
+
+                                        val contextParams = ContextBuilder.ContextParams(
+                                            systemPrompt = systemInstruction,
+                                            pinnedFacts = "",
+                                            userProfile = "",
+                                            crossSessionMemories = emptyList(),
+                                            inSessionSummaries = emptyList(),
+                                            history = historyMessages,
+                                            currentMessage = LLMMessage(LLMMessage.MessageRole.USER, lastUserMessage.content)
+                                        )
+
+                                        val llmMessages = ContextBuilder.buildContextMessages(contextParams)
+
+                                        // Convert LLMMessage[] to string prompt for engine
+                                        val fullPrompt = llmMessages.joinToString("\n") { 
+                                            "${it.role.name}: ${it.content}" 
+                                        }
+
+                                        android.util.Log.d("ChatScreen", "Regenerating message with context messages count: ${llmMessages.size}")
+                                        
+                                        var tokenCount = 0
+                                        engine.generate(fullPrompt).collect { token ->
+                                            tokenCount++
+                                            assistantResponse += token
+                                            
+                                            // Update UI with regenerated response
+                                            messages = messages.toMutableList().apply {
+                                                this[index] = ChatMessage(
+                                                    role = "assistant",
+                                                    content = assistantResponse,
+                                                    tokenCount = tokenCount,
+                                                    generationTimeMs = System.currentTimeMillis() - generationStartTime,
+                                                    isStreaming = true,
+                                                )
+                                            }
+                                        }
+                                        
+                                        // Final update
+                                        messages = messages.toMutableList().apply {
+                                            this[index] = ChatMessage(
+                                                role = "assistant",
+                                                content = assistantResponse,
+                                                tokenCount = tokenCount,
+                                                generationTimeMs = System.currentTimeMillis() - generationStartTime,
+                                                isStreaming = false,
+                                            )
+                                        }
+                                        
+                                        // Save regenerated message to database if session is active
+                                        if (sessionId != null && repository != null) {
+                                            repository.addMessage(sessionId, "assistant", assistantResponse)
+                                            repository.updateSessionTimestamp(sessionId)
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("ChatScreen", "Regeneration failed", e)
+                                    } finally {
+                                        isGenerating = false
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    onEdit = {
+                        if (message.role == "user" && !isGenerating) {
+                            editingMessageIndex = index
+                        }
                     },
                     onCopy = {
                         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -312,6 +441,15 @@ fun ChatScreen(
                                         content = currentInput
                                     )
                                     messages = messages + userMessage
+                                    
+                                    // Save user message to database if session is active
+                                    if (sessionId != null && repository != null) {
+                                        scope.launch {
+                                            repository.addMessage(sessionId, "user", currentInput)
+                                            repository.updateSessionTimestamp(sessionId)
+                                        }
+                                    }
+                                    
                                     val input = currentInput
                                     currentInput = ""
 
@@ -320,25 +458,36 @@ fun ChatScreen(
                                             var assistantResponse = ""
                                             val generationStartTime = System.currentTimeMillis()
 
-                                            // Build conversation history prompt with system instruction
-                                            val conversationHistory = StringBuilder()
-                                            conversationHistory.append("System: $systemInstruction\n\n")
-
-                                            // Add previous messages to context (last 5, excluding current)
-                                            messages.dropLast(1).takeLast(5).forEach { message ->
+                                            // Build conversation history using ContextBuilder
+                                            val historyMessages = messages.dropLast(1).takeLast(10).map { message ->
                                                 when (message.role) {
-                                                    "user" -> conversationHistory.append("User: ${message.content}\n")
-                                                    "assistant" -> conversationHistory.append("Assistant: ${message.content}\n")
+                                                    "user" -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                                                    "assistant" -> LLMMessage(LLMMessage.MessageRole.ASSISTANT, message.content)
+                                                    else -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
                                                 }
                                             }
 
-                                            // Add current user message
-                                            conversationHistory.append("User: $input\n")
-                                            conversationHistory.append("Assistant:")
+                                            val currentMessage = LLMMessage(LLMMessage.MessageRole.USER, input)
 
-                                            val fullPrompt = conversationHistory.toString()
+                                            val contextParams = ContextBuilder.ContextParams(
+                                                systemPrompt = systemInstruction,
+                                                pinnedFacts = "",
+                                                userProfile = "",
+                                                crossSessionMemories = emptyList(),
+                                                inSessionSummaries = emptyList(),
+                                                history = historyMessages,
+                                                currentMessage = currentMessage
+                                            )
+
+                                            val llmMessages = ContextBuilder.buildContextMessages(contextParams)
+
+                                            // Convert LLMMessage[] to string prompt for engine
+                                            val fullPrompt = llmMessages.joinToString("\n") { 
+                                                "${it.role.name}: ${it.content}" 
+                                            }
+
                                             android.util.Log.d("ChatScreen", "Starting generation for model: $modelId")
-                                            android.util.Log.d("ChatScreen", "Full prompt: $fullPrompt")
+                                            android.util.Log.d("ChatScreen", "Context messages count: ${llmMessages.size}")
                                             android.util.Log.d("ChatScreen", "Engine class: ${engine::class.java.simpleName}")
 
                                             // Check if model file exists
@@ -351,6 +500,8 @@ fun ChatScreen(
                                             var lastTokenTime = System.currentTimeMillis()
                                             val timeoutMs = 30000L // 30 second timeout
                                             var stoppedOnChatEcho = false
+                                            var tokenBuffer = "" // Buffer for suspicious tokens
+                                            var bufferIsSuspicious = false // Flag to track if buffer contains suspicious tokens
 
                                             try {
                                                 engine.generate(fullPrompt).collect { token ->
@@ -364,60 +515,165 @@ fun ChatScreen(
 
                                                     tokenCount++
                                                     android.util.Log.d("ChatScreen", "Streamed token #$tokenCount: \"$token\"")
-                                                    assistantResponse += token.replace("\uFFFD", "")
 
-                                                    if (StreamingSafeguard.shouldStopOnChatEcho(assistantResponse)) {
-                                                        assistantResponse = StreamingSafeguard.trimOnChatEcho(assistantResponse)
-                                                        val genMs = System.currentTimeMillis() - generationStartTime
-                                                        android.util.Log.i(
-                                                            TAG,
-                                                            "Stopped generation on chat boundary (echo of next turn) after $tokenCount tokens",
-                                                        )
+                                                    // Clean token
+                                                    val tokenClean = token.replace("\uFFFD", "")
+
+                                                    // Check if token matches stop marker prefix (suspicious token)
+                                                    val isPrefix = StreamingSafeguard.matchesStopMarkerPrefix(tokenClean.trim())
+
+                                                    if (isPrefix) {
+                                                        // Buffer suspicious tokens - don't render yet
+                                                        android.util.Log.d(TAG, "Buffering suspicious token: '$tokenClean'")
+                                                        tokenBuffer += tokenClean
+                                                        bufferIsSuspicious = true
+                                                    } else if (bufferIsSuspicious) {
+                                                        // We have a buffered token, check if buffer + current token triggers stop condition
+                                                        val testResponse = assistantResponse + tokenBuffer + tokenClean
+
+                                                        // Check for chat echo
+                                                        if (StreamingSafeguard.shouldStopOnChatEcho(testResponse)) {
+                                                            android.util.Log.i(TAG, "Buffered token + current token triggers stop condition, discarding buffer")
+                                                            stoppedOnChatEcho = true
+                                                            engine.cancel()
+                                                            throw CancellationException("Stopped on chat echo")
+                                                        }
+
+                                                        // Check for garbage characters
+                                                        if (StreamingSafeguard.shouldStopOnGarbage(testResponse)) {
+                                                            android.util.Log.i(TAG, "Detected garbage characters with buffered token, cancelling stream")
+                                                            stoppedOnChatEcho = true
+                                                            engine.cancel()
+                                                            throw CancellationException("Stopped on garbage characters")
+                                                        }
+
+                                                        // Check for repetition
+                                                        if (StreamingSafeguard.shouldStopOnRepetition(testResponse)) {
+                                                            android.util.Log.i(TAG, "Detected repetition with buffered token, cancelling stream")
+                                                            stoppedOnChatEcho = true
+                                                            engine.cancel()
+                                                            throw CancellationException("Stopped on character repetition")
+                                                        }
+
+                                                        // Safe to render buffer + current token
+                                                        android.util.Log.d(TAG, "Flushing buffer: '$tokenBuffer' + '$tokenClean'")
+                                                        assistantResponse += tokenBuffer + tokenClean
+                                                        tokenBuffer = ""
+                                                        bufferIsSuspicious = false
+
+                                                        // Update UI
                                                         messages = if (messages.lastOrNull()?.role == "assistant") {
                                                             messages.dropLast(1) + ChatMessage(
                                                                 role = "assistant",
                                                                 content = assistantResponse,
                                                                 tokenCount = tokenCount,
-                                                                generationTimeMs = genMs,
-                                                                isStreaming = false,
+                                                                generationTimeMs = currentTime - generationStartTime,
+                                                                isStreaming = true,
                                                             )
                                                         } else {
                                                             messages + ChatMessage(
                                                                 role = "assistant",
                                                                 content = assistantResponse,
                                                                 tokenCount = tokenCount,
-                                                                generationTimeMs = genMs,
-                                                                isStreaming = false,
+                                                                generationTimeMs = currentTime - generationStartTime,
+                                                                isStreaming = true,
                                                             )
                                                         }
-                                                        stoppedOnChatEcho = true
-                                                        engine.cancel()
-                                                        return@collect
-                                                    }
-
-                                                    messages = if (messages.lastOrNull()?.role == "assistant") {
-                                                        messages.dropLast(1) + ChatMessage(
-                                                            role = "assistant",
-                                                            content = assistantResponse,
-                                                            tokenCount = tokenCount,
-                                                            generationTimeMs = currentTime - generationStartTime,
-                                                            isStreaming = true,
-                                                        )
                                                     } else {
-                                                        messages + ChatMessage(
-                                                            role = "assistant",
-                                                            content = assistantResponse,
-                                                            tokenCount = tokenCount,
-                                                            generationTimeMs = currentTime - generationStartTime,
-                                                            isStreaming = true,
-                                                        )
+                                                        // Normal token, check stop conditions and render directly
+                                                        val testResponse = assistantResponse + tokenClean
+
+                                                        // Check for chat echo
+                                                        if (StreamingSafeguard.shouldStopOnChatEcho(testResponse)) {
+                                                            android.util.Log.i(TAG, "Detected chat echo, cancelling stream")
+                                                            stoppedOnChatEcho = true
+                                                            engine.cancel()
+                                                            throw CancellationException("Stopped on chat echo")
+                                                        }
+
+                                                        // Check for garbage characters
+                                                        if (StreamingSafeguard.shouldStopOnGarbage(testResponse)) {
+                                                            android.util.Log.i(TAG, "Detected garbage characters, cancelling stream")
+                                                            stoppedOnChatEcho = true
+                                                            engine.cancel()
+                                                            throw CancellationException("Stopped on garbage characters")
+                                                        }
+
+                                                        // Check for repetition
+                                                        if (StreamingSafeguard.shouldStopOnRepetition(testResponse)) {
+                                                            android.util.Log.i(TAG, "Detected character repetition, cancelling stream")
+                                                            stoppedOnChatEcho = true
+                                                            engine.cancel()
+                                                            throw CancellationException("Stopped on character repetition")
+                                                        }
+
+                                                        // Safe to add token directly
+                                                        assistantResponse += tokenClean
+
+                                                        // Update UI
+                                                        messages = if (messages.lastOrNull()?.role == "assistant") {
+                                                            messages.dropLast(1) + ChatMessage(
+                                                                role = "assistant",
+                                                                content = assistantResponse,
+                                                                tokenCount = tokenCount,
+                                                                generationTimeMs = currentTime - generationStartTime,
+                                                                isStreaming = true,
+                                                            )
+                                                        } else {
+                                                            messages + ChatMessage(
+                                                                role = "assistant",
+                                                                content = assistantResponse,
+                                                                tokenCount = tokenCount,
+                                                                generationTimeMs = currentTime - generationStartTime,
+                                                                isStreaming = true,
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             } catch (_: CancellationException) {
                                                 // User pressed stop or engine cancelled after chat-echo cutoff
+                                                if (stoppedOnChatEcho) {
+                                                    // Trim response to remove any unwanted content
+                                                    val trimmedResponse = StreamingSafeguard.trimOnChatEcho(assistantResponse).trimEnd()
+                                                    val genMs = System.currentTimeMillis() - generationStartTime
+                                                    android.util.Log.i(TAG, "Updating final message after stop condition")
+                                                    messages = if (messages.lastOrNull()?.role == "assistant") {
+                                                        messages.dropLast(1) + ChatMessage(
+                                                            role = "assistant",
+                                                            content = trimmedResponse,
+                                                            tokenCount = tokenCount,
+                                                            generationTimeMs = genMs,
+                                                            isStreaming = false,
+                                                        )
+                                                    } else {
+                                                        messages + ChatMessage(
+                                                            role = "assistant",
+                                                            content = trimmedResponse,
+                                                            tokenCount = tokenCount,
+                                                            generationTimeMs = genMs,
+                                                            isStreaming = false,
+                                                        )
+                                                    }
+                                                } else {
+                                                    // Stream cancelled for other reasons, flush buffer if needed
+                                                    if (bufferIsSuspicious && tokenBuffer.isNotEmpty()) {
+                                                        android.util.Log.d(TAG, "Stream cancelled with buffered token, flushing buffer: '$tokenBuffer'")
+                                                        assistantResponse += tokenBuffer
+                                                        tokenBuffer = ""
+                                                        bufferIsSuspicious = false
+                                                    }
+                                                }
                                             }
 
                                             if (!stoppedOnChatEcho) {
+                                                // Flush buffer if stream completed normally with buffered token
+                                                if (bufferIsSuspicious && tokenBuffer.isNotEmpty()) {
+                                                    android.util.Log.d(TAG, "Stream completed with buffered token, flushing buffer: '$tokenBuffer'")
+                                                    assistantResponse += tokenBuffer
+                                                    tokenBuffer = ""
+                                                    bufferIsSuspicious = false
+                                                }
+
                                                 val generationTimeMs = System.currentTimeMillis() - generationStartTime
                                                 android.util.Log.d(
                                                     TAG,
@@ -435,6 +691,14 @@ fun ChatScreen(
                                                 } else {
                                                     messages
                                                 }
+                                                
+                                                // Save assistant message to database if session is active
+                                                if (sessionId != null && repository != null && assistantResponse.isNotEmpty()) {
+                                                    scope.launch {
+                                                        repository.addMessage(sessionId, "assistant", assistantResponse)
+                                                        repository.updateSessionTimestamp(sessionId)
+                                                    }
+                                                }
                                             }
                                         } catch (e: Exception) {
                                             android.util.Log.e("ChatScreen", "Generation failed", e)
@@ -442,6 +706,13 @@ fun ChatScreen(
                                                 role = "assistant",
                                                 content = "Error: ${e.message}"
                                             )
+                                            
+                                            // Save error message to database if session is active
+                                            if (sessionId != null && repository != null) {
+                                                scope.launch {
+                                                    repository.addMessage(sessionId, "assistant", "Error: ${e.message}")
+                                                }
+                                            }
                                         } finally {
                                             isGenerating = false
                                         }
@@ -462,6 +733,118 @@ fun ChatScreen(
             }
         }
         }
+    }
+    
+    // Edit message dialog
+    if (editingMessageIndex != null) {
+        val messageToEdit = messages[editingMessageIndex!!]
+        EditMessageDialog(
+            originalContent = messageToEdit.content,
+            onDismiss = { editingMessageIndex = null },
+            onConfirm = { newContent ->
+                scope.launch {
+                    try {
+                        // Delete all messages after the edited message
+                        val editedMessage = messages[editingMessageIndex!!]
+                        val messagesBefore = messages.take(editingMessageIndex!!)
+                        
+                        // Update the message content
+                        messages = messagesBefore + ChatMessage(
+                            role = "user",
+                            content = newContent
+                        )
+                        
+                        // Delete messages after edit from database if session is active
+                        if (sessionId != null && repository != null) {
+                            repository.deleteMessagesAfter(sessionId, editedMessage.tokenCount.toLong())
+                        }
+                        
+                        // Regenerate assistant response
+                        isGenerating = true
+                        var assistantResponse = ""
+                        val generationStartTime = System.currentTimeMillis()
+                        
+                        // Build conversation history using ContextBuilder
+                        val historyMessages = messagesBefore.map { message ->
+                            when (message.role) {
+                                "user" -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                                "assistant" -> LLMMessage(LLMMessage.MessageRole.ASSISTANT, message.content)
+                                else -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                            }
+                        }
+
+                        val contextParams = ContextBuilder.ContextParams(
+                            systemPrompt = systemInstruction,
+                            pinnedFacts = "",
+                            userProfile = "",
+                            crossSessionMemories = emptyList(),
+                            inSessionSummaries = emptyList(),
+                            history = historyMessages,
+                            currentMessage = LLMMessage(LLMMessage.MessageRole.USER, newContent)
+                        )
+
+                        val llmMessages = ContextBuilder.buildContextMessages(contextParams)
+
+                        // Convert LLMMessage[] to string prompt for engine
+                        val fullPrompt = llmMessages.joinToString("\n") { 
+                            "${it.role.name}: ${it.content}" 
+                        }
+
+                        android.util.Log.d("ChatScreen", "Regenerating after edit with context messages count: ${llmMessages.size}")
+                        
+                        var tokenCount = 0
+                        engine.generate(fullPrompt).collect { token ->
+                            tokenCount++
+                            assistantResponse += token
+                            
+                            // Update UI with regenerated response
+                            messages = if (messages.lastOrNull()?.role == "assistant") {
+                                messages.dropLast(1) + ChatMessage(
+                                    role = "assistant",
+                                    content = assistantResponse,
+                                    tokenCount = tokenCount,
+                                    generationTimeMs = System.currentTimeMillis() - generationStartTime,
+                                    isStreaming = true,
+                                )
+                            } else {
+                                messages + ChatMessage(
+                                    role = "assistant",
+                                    content = assistantResponse,
+                                    tokenCount = tokenCount,
+                                    generationTimeMs = System.currentTimeMillis() - generationStartTime,
+                                    isStreaming = true,
+                                )
+                            }
+                        }
+                        
+                        // Final update
+                        messages = if (messages.lastOrNull()?.role == "assistant") {
+                            messages.dropLast(1) + ChatMessage(
+                                role = "assistant",
+                                content = assistantResponse,
+                                tokenCount = tokenCount,
+                                generationTimeMs = System.currentTimeMillis() - generationStartTime,
+                                isStreaming = false,
+                            )
+                        } else {
+                            messages
+                        }
+                        
+                        // Save messages to database if session is active
+                        if (sessionId != null && repository != null) {
+                            repository.addMessage(sessionId, "user", newContent)
+                            repository.addMessage(sessionId, "assistant", assistantResponse)
+                            repository.updateSessionTimestamp(sessionId)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("ChatScreen", "Edit and regenerate failed", e)
+                    } finally {
+                        isGenerating = false
+                    }
+                }
+                editingMessageIndex = null
+            }
+        )
     }
 }
 

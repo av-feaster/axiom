@@ -399,7 +399,7 @@ fun EnhancedModelCard(
                         }
                         
                         LinearProgressIndicator(
-                            progress = progress,
+                            progress = { progress },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(6.dp),

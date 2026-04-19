@@ -38,6 +38,54 @@ private fun builtInRegistry(): List<Model> = listOf(
         quantization = "Q4_K_M",
         minRam = 2L * 1024 * 1024 * 1024,
         recommended = false
+    ),
+    Model(
+        id = "qwen3.5-0.8b",
+        name = "Qwen 3.5 0.8B",
+        description = "Ultra-small model for efficient inference (Q4_K_M GGUF)",
+        size = 533L * 1024 * 1024,
+        downloadUrl = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+        checksum = "",
+        architecture = "qwen2",
+        quantization = "Q4_K_M",
+        minRam = 2L * 1024 * 1024 * 1024,
+        recommended = false
+    ),
+    Model(
+        id = "qwen3.5-4b",
+        name = "Qwen 3.5 4B",
+        description = "Balanced model for good quality and speed (Q4_K_M GGUF)",
+        size = 2740L * 1024 * 1024,
+        downloadUrl = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+        checksum = "",
+        architecture = "qwen2",
+        quantization = "Q4_K_M",
+        minRam = 4L * 1024 * 1024 * 1024,
+        recommended = false
+    ),
+    Model(
+        id = "deepseek-r1-1.5b",
+        name = "DeepSeek R1 1.5B",
+        description = "Reasoning-optimized model with chain-of-thought capabilities (Q4_K_M GGUF)",
+        size = 1120L * 1024 * 1024,
+        downloadUrl = "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+        checksum = "",
+        architecture = "qwen2",
+        quantization = "Q4_K_M",
+        minRam = 3L * 1024 * 1024 * 1024,
+        recommended = false
+    ),
+    Model(
+        id = "gemma-3-4b",
+        name = "Gemma 3 4B",
+        description = "Google's efficient instruction-tuned model (Q4_K_M GGUF)",
+        size = 2490L * 1024 * 1024,
+        downloadUrl = "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
+        checksum = "",
+        architecture = "gemma",
+        quantization = "Q4_K_M",
+        minRam = 4L * 1024 * 1024 * 1024,
+        recommended = false
     )
 )
 
@@ -199,12 +247,29 @@ class DefaultModelManager(private val context: Context) : ModelManager {
         }
     
     override fun getInstalledModels(): List<Model> {
+        val registryById = builtInRegistry().associateBy { it.id }
         return modelsDirectory.listFiles()
-            ?.filter { it.extension == "gguf" }
+            ?.filter { it.isFile && it.extension == "gguf" }
             ?.mapNotNull { file ->
-                // TODO: Read model metadata from file
-                null
-            } ?: emptyList()
+                val id = file.nameWithoutExtension
+                val fromRegistry = registryById[id]
+                if (fromRegistry != null) {
+                    fromRegistry.copy(size = file.length())
+                } else {
+                    Model(
+                        id = id,
+                        name = id.replace('-', ' ').replaceFirstChar { it.uppercaseChar() },
+                        description = "",
+                        size = file.length(),
+                        downloadUrl = "",
+                        checksum = "",
+                        architecture = "",
+                        quantization = "",
+                        minRam = 0L,
+                        recommended = false
+                    )
+                }
+            }.orEmpty()
     }
     
     override suspend fun delete(model: Model): Boolean = withContext(Dispatchers.IO) {

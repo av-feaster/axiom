@@ -1,11 +1,15 @@
 package com.axiom.android.sdk.models
 
-import android.content.Context
-import com.axiom.android.sdk.AxiomSDK
+import android.app.Application
+import com.axiom.android.sdk.AxiomSDKConfig
 import com.axiom.android.sdk.AxiomState
-import com.axiom.core.Model
-import com.axiom.core.ModelManager
+import com.axiom.android.sdk.AxiomStateStore
+import com.axiom.android.sdk.domain.ActiveDownloadInfo
 import com.axiom.android.sdk.domain.DownloadState
+import com.axiom.android.sdk.domain.ModelDownloadState
+import com.axiom.android.sdk.domain.ModelUIItem
+import com.axiom.android.sdk.domain.withActiveDownload
+import com.axiom.core.ModelManager
 import com.axiom.models.DefaultModelManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,23 +26,74 @@ import kotlinx.coroutines.withContext
  * Wrapper implementation of AxiomModelManager
  * Manages the internal ModelManager and provides Flow-based download progress
  */
-class ModelManagerWrapper(private val context: Context) : AxiomModelManager {
-    
-    private val internalModelManager: ModelManager = DefaultModelManager(context)
+object ModelManagerWrapper : AxiomModelManager {
+
+    private lateinit var internalModelManager: ModelManager
     private var downloadJob: Job? = null
     private var currentModelId: String? = null
     private var isPaused = false
-    
+    private lateinit var config: AxiomSDKConfig
+
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val downloadState: StateFlow<DownloadState> = _downloadState
-    
+
+    /** Last [DownloadState.Downloading] metrics; used for [DownloadState.Paused] and [ActiveDownloadInfo]. */
+    private var lastProgressSnapshot: Triple<Float, Long, Long>? = null
+
+    private val _activeDownload = MutableStateFlow<ActiveDownloadInfo?>(null)
+
+    /**
+     * Initialize the model manager wrapper with application and config
+     * @param application Application context
+     * @param config SDK configuration
+     */
+    fun init(application: Application, config: AxiomSDKConfig) {
+        this.config = config
+        internalModelManager = DefaultModelManager(application)
+    }
+
+    /**
+     * Get the singleton instance
+     * @return ModelManagerWrapper instance
+     */
+    fun get(): ModelManagerWrapper = this
+
+    override fun getActiveDownloadFlow(): StateFlow<ActiveDownloadInfo?> = _activeDownload
+
+    private fun publishActiveDownload() {
+        val id = currentModelId
+        val s = _downloadState.value
+        _activeDownload.value = when {
+            id == null -> null
+            s is DownloadState.Idle -> null
+            else -> ActiveDownloadInfo(
+                modelId = id,
+                state = s,
+                progressSnapshot = lastProgressSnapshot
+            )
+        }
+    }
+
+    private fun setDownloadState(state: DownloadState) {
+        if (state is DownloadState.Downloading) {
+            lastProgressSnapshot = Triple(state.progress, state.downloadedBytes, state.totalBytes)
+        }
+        _downloadState.value = state
+        publishActiveDownload()
+    }
+
     override fun download(modelId: String) {
         if (downloadJob?.isActive == true) {
             cancel()
+        } else {
+            clearTerminalSessionIfNeeded()
         }
 
         currentModelId = modelId
         isPaused = false
+        lastProgressSnapshot = null
+        setDownloadState(DownloadState.Downloading(0f, 0L, 0L))
+        AxiomStateStore.setState(AxiomState.Downloading(0f))
 
         downloadJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -46,67 +101,134 @@ class ModelManagerWrapper(private val context: Context) : AxiomModelManager {
                 val model = registry.find { it.id == modelId }
 
                 if (model == null) {
-                    _downloadState.value = DownloadState.Failed("Model not found: $modelId")
-                    AxiomSDK.updateState(AxiomState.Error("Model not found: $modelId"))
+                    setDownloadState(DownloadState.Failed("Model not found: $modelId"))
+                    AxiomStateStore.setState(AxiomState.Error("Model not found: $modelId"))
                     return@launch
                 }
 
-                _downloadState.value = DownloadState.Downloading(0f, 0L, model.size)
-                AxiomSDK.updateState(AxiomState.Downloading(0f))
+                setDownloadState(DownloadState.Downloading(0f, 0L, model.size))
+                AxiomStateStore.setState(AxiomState.Downloading(0f))
 
                 val downloadedPath = internalModelManager.download(model) { progress ->
-                    _downloadState.value = DownloadState.Downloading(progress, (progress * model.size).toLong(), model.size)
-                    AxiomSDK.updateState(AxiomState.Downloading(progress))
+                    setDownloadState(
+                        DownloadState.Downloading(
+                            progress,
+                            (progress * model.size).toLong(),
+                            model.size
+                        )
+                    )
+                    AxiomStateStore.setState(AxiomState.Downloading(progress))
                 }
 
-                _downloadState.value = DownloadState.Completed(downloadedPath)
-                AxiomSDK.updateState(AxiomState.Ready)
+                setDownloadState(DownloadState.Completed(downloadedPath))
+                AxiomStateStore.setState(AxiomState.Ready)
             } catch (e: Exception) {
-                _downloadState.value = DownloadState.Failed(e.message ?: "Download failed")
-                AxiomSDK.updateState(AxiomState.Error(e.message ?: "Download failed"))
+                setDownloadState(DownloadState.Failed(e.message ?: "Download failed"))
+                AxiomStateStore.setState(AxiomState.Error(e.message ?: "Download failed"))
             }
         }
     }
-    
+
+    /** Clears a finished session so a new [download] can start without coalescing [StateFlow] updates. */
+    private fun clearTerminalSessionIfNeeded() {
+        if (downloadJob?.isActive == true) return
+        val s = _downloadState.value
+        if (s is DownloadState.Completed || s is DownloadState.Failed) {
+            currentModelId = null
+            lastProgressSnapshot = null
+            _downloadState.value = DownloadState.Idle
+            publishActiveDownload()
+        }
+    }
+
     override fun pause() {
         if (downloadJob?.isActive == true) {
             isPaused = true
             downloadJob?.cancel()
-            _downloadState.value = DownloadState.Paused
+            setDownloadState(DownloadState.Paused)
         }
     }
-    
+
     override fun resume() {
         if (isPaused && currentModelId != null) {
             download(currentModelId!!)
         }
     }
-    
+
     override fun cancel() {
         downloadJob?.cancel()
         downloadJob = null
         currentModelId = null
         isPaused = false
+        lastProgressSnapshot = null
         _downloadState.value = DownloadState.Idle
+        publishActiveDownload()
     }
-    
+
     override fun observeProgress(): Flow<DownloadState> = callbackFlow {
         val job = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             _downloadState.collect { state ->
                 trySend(state)
             }
         }
-        
+
         awaitClose {
             job.cancel()
         }
     }.flowOn(Dispatchers.IO)
-    
-    override fun getInstalledModels(): List<Model> {
-        return internalModelManager.getInstalledModels()
+
+    override fun getInstalledModels(): List<ModelUIItem> {
+        val installedModels = internalModelManager.getInstalledModels()
+        return installedModels.map { model ->
+            ModelUIItem(
+                id = model.id,
+                name = model.name,
+                description = model.description,
+                size = formatFileSize(model.size),
+                version = "1.0", // Default version since Model doesn't have version field
+                downloadState = ModelDownloadState.Installed
+            )
+        }
     }
-    
-    override suspend fun delete(model: Model): Boolean = withContext(Dispatchers.IO) {
-        internalModelManager.delete(model)
+
+    override suspend fun getAvailableModels(): List<ModelUIItem> = withContext(Dispatchers.IO) {
+        val installedModels = internalModelManager.getInstalledModels()
+        val registry = internalModelManager.fetchRegistry()
+
+        val base = registry.map { model ->
+            val isInstalled = installedModels.any { it.id == model.id }
+            ModelUIItem(
+                id = model.id,
+                name = model.name,
+                description = model.description,
+                size = formatFileSize(model.size),
+                version = "1.0", // Default version since Model doesn't have version field
+                downloadState = if (isInstalled) {
+                    ModelDownloadState.Installed
+                } else {
+                    ModelDownloadState.NotStarted
+                }
+            )
+        }
+        base.withActiveDownload(_activeDownload.value)
+    }
+
+    override suspend fun delete(modelId: String): Boolean = withContext(Dispatchers.IO) {
+        val installedModels = internalModelManager.getInstalledModels()
+        val model = installedModels.find { it.id == modelId }
+        if (model != null) {
+            internalModelManager.delete(model)
+        } else {
+            false
+        }
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+            else -> "${bytes / (1024 * 1024 * 1024)} GB"
+        }
     }
 }

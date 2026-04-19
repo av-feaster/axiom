@@ -5,6 +5,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Shape system for Axiom SDK
+ * Lumina Neural Design System
  */
 data class AxiomShapes(
     val small: RoundedCornerShape,
@@ -17,10 +18,11 @@ data class AxiomShapes(
 
 /**
  * Default shapes for Axiom SDK
+ * Lumina Neural Design System - ROUND_EIGHT (8px to 12px)
  */
 val defaultAxiomShapes = AxiomShapes(
-    small = RoundedCornerShape(4.dp),
-    medium = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
     large = RoundedCornerShape(16.dp),
     extraLarge = RoundedCornerShape(24.dp),
     full = RoundedCornerShape(999.dp),

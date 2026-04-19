@@ -88,32 +88,19 @@ object StreamingSafeguard {
         return cleanText
     }
 
-    /**
-     * Validate that the generated text is safe to display
-     * Returns false if the text should be discarded entirely
-     */
-    /**
-     * Markers that indicate the model is hallucinating the next chat turn (common with plain-text
-     * prompts like `User:` / `Assistant:`). Stop streaming when any of these appear in the
-     * assistant delta only (not the full prompt).
-     */
-    private val chatEchoMarkers: List<String> = listOf(
-        "\n### User:",
-        "\r\n### User:",
-        "\nUser:",
-        "\r\nUser:",
-        "\n### Assistant:",
-        "\nAssistant:",
-        "\r\nAssistant:",
+    // Chat echo markers for detecting when model starts generating as user
+    private val chatEchoMarkers = listOf(
         "### User:",
+        "### System:",
         "### Assistant:",
+        "User:",
+        "System:",
+        "Assistant:",
         "<|im_start|>user",
-        "<|im_start|>assistant",
+        "<|im_start|>system",
+        "<|im_start|>assistant"
     )
 
-    /**
-     * True if [assistantDelta] contains a role boundary echo and generation should stop.
-     */
     fun shouldStopOnChatEcho(assistantDelta: String): Boolean =
         chatEchoMarkers.any { marker -> assistantDelta.contains(marker, ignoreCase = true) }
 
@@ -127,6 +114,56 @@ object StreamingSafeguard {
             if (i >= 0 && i < cut) cut = i
         }
         return assistantDelta.substring(0, cut).trimEnd()
+    }
+
+    /**
+     * Check if the model is generating garbage characters (consecutive UTF-8 replacement characters)
+     * This happens when the model generates out-of-vocabulary tokens or invalid UTF-8
+     */
+    fun shouldStopOnGarbage(text: String, maxConsecutiveGarbage: Int = 3): Boolean {
+        val garbageChar = '\uFFFD' // UTF-8 replacement character
+        var consecutiveCount = 0
+
+        for (char in text.reversed()) {
+            if (char == garbageChar) {
+                consecutiveCount++
+                if (consecutiveCount >= maxConsecutiveGarbage) {
+                    Log.w(TAG, "Detected $consecutiveCount consecutive garbage characters")
+                    return true
+                }
+            } else {
+                break
+            }
+        }
+
+        return false
+    }
+
+    /**
+     * Check if the model is repeating the same character (stuck in a loop)
+     */
+    fun shouldStopOnRepetition(text: String, maxRepetition: Int = 10): Boolean {
+        if (text.length < maxRepetition) return false
+
+        val lastChars = text.takeLast(maxRepetition)
+        val allSame = lastChars.all { it == lastChars[0] }
+
+        if (allSame) {
+            Log.w(TAG, "Detected repetition of character '${lastChars[0]}' $maxRepetition times")
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * Check if the token matches a stop marker prefix (e.g., "User", "Assistant")
+     * This is used for buffering suspicious tokens that might form stop markers
+     */
+    fun matchesStopMarkerPrefix(text: String): Boolean {
+        val prefixes = listOf("user", "assistant", "system")
+        val textLower = text.lowercase().trim()
+        return prefixes.any { it == textLower }
     }
 
     fun isSafeToDisplay(text: String): Boolean {
@@ -154,5 +191,16 @@ object StreamingSafeguard {
         }
 
         return true
+    }
+
+    /**
+     * Strip DeepSeek R1 thinking tags from text
+     * Removes both complete and incomplete thinking blocks
+     */
+    fun stripThinkingTags(text: String): String {
+        return text
+            .replace(Regex("<\\|think\\|>[\\s\\S]*?<\\|/think\\|>"), "")  // Complete blocks
+            .replace(Regex("<\\|think\\|>[\\s\\S]*"), "")             // Incomplete blocks (aborted mid-generation)
+            .trimStart()
     }
 }

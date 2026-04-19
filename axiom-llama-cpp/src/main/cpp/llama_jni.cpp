@@ -105,6 +105,19 @@ static float g_temperature = 0.7f;
 static int g_top_k = 40;
 static float g_top_p = 0.95f;
 static float g_repeat_penalty = 1.0f;
+static bool g_cancel_generation = false;
+static std::vector<std::string> g_stop_tokens;
+
+// Helper function to check if text contains any stop token
+static bool contains_stop_token(const std::string& text) {
+    for (const auto& stop_token : g_stop_tokens) {
+        if (text.find(stop_token) != std::string::npos) {
+            LOGI("Stop token detected: %s", stop_token.c_str());
+            return true;
+        }
+    }
+    return false;
+}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_axiom_llama_cpp_LlamaCppEngine_nativeInit(
@@ -116,7 +129,8 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeInit(
     jint top_k,
     jfloat top_p,
     jfloat repeat_penalty,
-    jint max_tokens
+    jint max_tokens,
+    jobjectArray stop_tokens
 ) {
     const char* model_path_cstr = env->GetStringUTFChars(model_path, nullptr);
     
@@ -128,6 +142,21 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeInit(
     g_top_k = top_k;
     g_top_p = top_p;
     g_repeat_penalty = repeat_penalty;
+    g_cancel_generation = false;
+    
+    // Parse stop tokens
+    g_stop_tokens.clear();
+    if (stop_tokens != nullptr) {
+        jsize stop_tokens_length = env->GetArrayLength(stop_tokens);
+        for (jsize i = 0; i < stop_tokens_length; i++) {
+            jstring stop_token = (jstring) env->GetObjectArrayElement(stop_tokens, i);
+            const char* stop_token_cstr = env->GetStringUTFChars(stop_token, nullptr);
+            g_stop_tokens.push_back(std::string(stop_token_cstr));
+            env->ReleaseStringUTFChars(stop_token, stop_token_cstr);
+            env->DeleteLocalRef(stop_token);
+        }
+        LOGI("Loaded %zu stop tokens", g_stop_tokens.size());
+    }
     
     // Initialize backend
     llama_backend_init();
@@ -221,6 +250,12 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeGenerate(JNIEnv* env, jobject /* t
     
     // Generation loop
     for (int i = 0; i < max_tokens; i++) {
+        // Check for cancellation
+        if (g_cancel_generation) {
+            LOGI("Generation cancelled by user");
+            break;
+        }
+        
         // Get logits for next token
         float* logits = llama_get_logits(g_context);
         
@@ -249,6 +284,12 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeGenerate(JNIEnv* env, jobject /* t
         }
         
         result += std::string(token_str, token_len);
+        
+        // Check for stop tokens
+        if (contains_stop_token(result)) {
+            LOGI("Stopping generation due to stop token");
+            break;
+        }
         
         // Check for end of sequence
         if (new_token == llama_vocab_eos(vocab)) {
@@ -328,6 +369,12 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
     
     // Generation loop
     for (int i = 0; i < g_max_tokens; i++) {
+        // Check for cancellation
+        if (g_cancel_generation) {
+            LOGI("Streaming cancelled by user");
+            break;
+        }
+        
         float* logits = llama_get_logits(g_context);
         
         // Simple greedy sampling
@@ -361,10 +408,12 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         env->CallVoidMethod(g_callback_object, g_callback_method, token_jstring);
         env->DeleteLocalRef(token_jstring);
         
+        // Check for end of sequence
         if (new_token == llama_vocab_eos(vocab)) {
             break;
         }
         
+        // Prepare next batch with single token
         llama_batch next_batch = llama_batch_get_one(&new_token, 1);
         
         if (llama_decode(g_context, next_batch) != 0) {
@@ -396,5 +445,14 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeCleanup(JNIEnv* env, jobject /* th
         g_model = nullptr;
     }
     
+    g_cancel_generation = false;
+    g_stop_tokens.clear();
+    
     llama_backend_free();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_axiom_llama_cpp_LlamaCppEngine_nativeCancel(JNIEnv* env, jobject /* this */) {
+    LOGI("Cancelling generation");
+    g_cancel_generation = true;
 }

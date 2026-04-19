@@ -7,6 +7,9 @@ import android.content.Context
  */
 data class AxiomSDKConfig(
     val context: Context,
+    val mode: AxiomMode = AxiomMode.Managed,
+    val modelsDir: String? = null,
     val enableLogging: Boolean = true,
+    val defaultModelId: String? = null,
     val maxCacheSize: Long = 512 * 1024 * 1024L // 512MB default
 )

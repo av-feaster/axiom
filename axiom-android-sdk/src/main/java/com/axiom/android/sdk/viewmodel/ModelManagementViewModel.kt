@@ -32,17 +32,7 @@ internal class ModelManagementViewModel(
         viewModelScope.launch {
             try {
                 val installedModels = modelManager.getInstalledModels()
-                val modelUIItems = installedModels.map { model ->
-                    ModelUIItem(
-                        id = model.id,
-                        name = model.name,
-                        description = model.description,
-                        size = formatSize(model.size),
-                        version = "1.0",
-                        downloadState = ModelDownloadState.Installed
-                    )
-                }
-                _models.value = modelUIItems
+                _models.value = installedModels
             } catch (e: Exception) {
                 // Handle error
             }
@@ -123,15 +113,6 @@ internal class ModelManagementViewModel(
             } else {
                 model
             }
-        }
-    }
-    
-    private fun formatSize(bytes: Long): String {
-        return when {
-            bytes < 1024 -> "$bytes B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-            else -> "${bytes / (1024 * 1024 * 1024)} GB"
         }
     }
 }
