@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.library)
     id("org.jetbrains.kotlin.android")
     `maven-publish`
-    signing
 }
 
 android {
@@ -72,7 +71,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.av-feaster"
                 artifactId = "axiom-llama-cpp"
-                version = "1.0.0"
+                version = "1.0.2"
 
                 pom {
                     name.set("Axiom Llama.cpp")
@@ -112,11 +111,6 @@ afterEvaluate {
     }
 }
 
-afterEvaluate {
-    signing {
-        sign(publishing.publications["release"])
-    }
-}
 
 dependencies {
     implementation(project(":axiom-core"))

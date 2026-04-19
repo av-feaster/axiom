@@ -4,7 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp") version "2.0.21-1.0.27"
     `maven-publish`
-    signing
 }
 
 android {
@@ -59,7 +58,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.av-feaster"
                 artifactId = "axiom-android-sdk"
-                version = "1.0.0"
+                version = "1.0.2"
 
                 pom {
                     name.set("Axiom Android SDK")
@@ -99,11 +98,6 @@ afterEvaluate {
     }
 }
 
-afterEvaluate {
-    signing {
-        sign(publishing.publications["release"])
-    }
-}
 
 dependencies {
     implementation(project(":axiom-core"))
