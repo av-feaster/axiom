@@ -4,6 +4,7 @@ import android.app.Application
 import com.axiom.android.sdk.AxiomSDKConfig
 import com.axiom.android.sdk.AxiomState
 import com.axiom.android.sdk.AxiomStateStore
+import com.axiom.core.FinishReason
 import com.axiom.core.LLMConfig
 import com.axiom.core.LLMEngine
 import com.axiom.llama.cpp.LlamaCppEngine
@@ -26,6 +27,7 @@ object EngineManager : AxiomEngine {
     private var currentGenerationJob: Job? = null
     private var isInitialized = false
     private lateinit var config: AxiomSDKConfig
+    override var isGenerating: Boolean = false
     
     /**
      * Initialize the engine manager with application and config
@@ -68,6 +70,7 @@ object EngineManager : AxiomEngine {
             return@callbackFlow
         }
         
+        isGenerating = true
         AxiomStateStore.setState(AxiomState.Generating)
         
         currentGenerationJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
@@ -79,11 +82,14 @@ object EngineManager : AxiomEngine {
             } catch (e: Exception) {
                 AxiomStateStore.setState(AxiomState.Error(e.message ?: "Generation failed"))
                 close(e)
+            } finally {
+                isGenerating = false
             }
         }
         
         awaitClose {
             currentGenerationJob?.cancel()
+            isGenerating = false
             AxiomStateStore.setState(AxiomState.Ready)
         }
     }.flowOn(Dispatchers.IO)
@@ -91,14 +97,19 @@ object EngineManager : AxiomEngine {
     /**
      * Generate text once (non-streaming)
      * @param prompt Input text prompt
-     * @return Complete generated text response
+     * @return Complete generated text response with finish reason
      */
-    override suspend fun generateOnce(prompt: String): String {
+    override suspend fun generateOnce(prompt: String): GenerationResult {
         if (!isInitialized) {
             throw IllegalStateException("Engine not initialized. Call initialize() first.")
         }
         return withContext(Dispatchers.IO) {
-            internalEngine.generate(prompt)
+            val coreResult = internalEngine.stream(prompt) {}
+            GenerationResult(
+                text = coreResult.text,
+                finishReason = coreResult.finishReason,
+                tokensGenerated = coreResult.tokensGenerated
+            )
         }
     }
     
@@ -108,6 +119,7 @@ object EngineManager : AxiomEngine {
     override fun cancel() {
         currentGenerationJob?.cancel()
         currentGenerationJob = null
+        isGenerating = false
     }
     
     /**

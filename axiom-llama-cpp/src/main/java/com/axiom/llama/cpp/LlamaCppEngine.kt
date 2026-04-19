@@ -114,7 +114,7 @@ class LlamaCppEngine : LLMEngine {
     }
 
     override suspend fun stream(prompt: String, onToken: (String) -> Unit): GenerationResult {
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             if (!isEngineInitialized) {
                 Log.e(TAG, "Stream called but engine not initialized")
                 throw IllegalStateException("Engine not initialized")
@@ -171,7 +171,7 @@ class LlamaCppEngine : LLMEngine {
                 }
             }
             
-            try {
+            val result = try {
                 nativeStream(prompt, callback)
                 
                 // Trim final accumulated text
@@ -187,6 +187,8 @@ class LlamaCppEngine : LLMEngine {
                 isGeneratingFlag = false
                 newCompletionEnd.complete(Unit)
             }
+            
+            result
         }
     }
 

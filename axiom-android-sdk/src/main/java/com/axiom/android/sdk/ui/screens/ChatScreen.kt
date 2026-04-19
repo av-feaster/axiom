@@ -33,6 +33,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -48,8 +49,11 @@ import com.axiom.android.sdk.data.entity.ChatMessageEntity
 import com.axiom.android.sdk.data.repository.ChatSessionRepository
 import com.axiom.core.ChatMode
 import com.axiom.core.ContextBuilder
+import com.axiom.core.ContextParams
 import com.axiom.core.LLMMessage
 import com.axiom.core.StreamingSafeguard
+import com.axiom.android.sdk.ui.components.chat.ChatMessage
+import com.axiom.android.sdk.ui.components.chat.ChatMessageItem
 import com.axiom.android.sdk.ui.screens.EditMessageDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -89,6 +93,10 @@ fun ChatScreen(
     var selectedMode by remember { mutableStateOf(ChatMode.GENERAL) }
     var editingMessageIndex by remember { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
+    
+    // Lumina Neural Design System - Clean, minimal interface
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val containerColor = MaterialTheme.colorScheme.surfaceContainer
     
     // Load messages from database if sessionId is provided
     LaunchedEffect(sessionId, repository) {
@@ -181,179 +189,155 @@ fun ChatScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-        // TopAppBar with model name
-        TopAppBar(
-            title = {
-                Column {
+            // TopAppBar with model name
+            TopAppBar(
+                title = {
                     Text(
                         text = modelId,
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        fontWeight = FontWeight.SemiBold
                     )
-                    Text(
-                        text = "Active",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            },
-            navigationIcon = {
-                IconButton(onClick = onNavigateBack) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back"
-                    )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        )
-
-        // Chat mode selector
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ChatMode.values().forEach { mode ->
-                FilterChip(
-                    selected = selectedMode == mode,
-                    onClick = { selectedMode = mode },
-                    label = { Text(mode.displayName) },
-                    modifier = Modifier.height(32.dp)
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
-            }
-        }
+            )
 
-        Spacer(modifier = Modifier.height(8.dp))
-        // Messages list
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .then(
-                    if (CHAT_LAYOUT_DEBUG) {
-                        Modifier.onGloballyPositioned { coords ->
-                            ChatLayoutLog.layoutLine("LazyColumn", coords)
-                        }
-                    } else {
-                        Modifier
-                    },
-                ),
-            state = listState,
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            itemsIndexed(
-                items = messages,
-                key = { index, _ -> index },
-            ) { index, message ->
-                ChatMessageItem(
-                    message = message,
-                    onRegenerate = {
-                        if (message.role == "assistant" && !isGenerating) {
-                            // Regenerate this assistant message
-                            val messagesBefore = messages.take(index)
-                            val lastUserMessage = messagesBefore.lastOrNull { it.role == "user" }
-                            
-                            if (lastUserMessage != null) {
-                                isGenerating = true
-                                scope.launch {
-                                    try {
-                                        var assistantResponse = ""
-                                        val generationStartTime = System.currentTimeMillis()
-                                        
-                                        // Build conversation history using ContextBuilder
-                                        val historyMessages = messagesBefore.map { message ->
-                                            when (message.role) {
-                                                "user" -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
-                                                "assistant" -> LLMMessage(LLMMessage.MessageRole.ASSISTANT, message.content)
-                                                else -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
-                                            }
-                                        }
-
-                                        val contextParams = ContextBuilder.ContextParams(
-                                            systemPrompt = systemInstruction,
-                                            pinnedFacts = "",
-                                            userProfile = "",
-                                            crossSessionMemories = emptyList(),
-                                            inSessionSummaries = emptyList(),
-                                            history = historyMessages,
-                                            currentMessage = LLMMessage(LLMMessage.MessageRole.USER, lastUserMessage.content)
-                                        )
-
-                                        val llmMessages = ContextBuilder.buildContextMessages(contextParams)
-
-                                        // Convert LLMMessage[] to string prompt for engine
-                                        val fullPrompt = llmMessages.joinToString("\n") { 
-                                            "${it.role.name}: ${it.content}" 
-                                        }
-
-                                        android.util.Log.d("ChatScreen", "Regenerating message with context messages count: ${llmMessages.size}")
-                                        
-                                        var tokenCount = 0
-                                        engine.generate(fullPrompt).collect { token ->
-                                            tokenCount++
-                                            assistantResponse += token
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Messages list
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .then(
+                        if (CHAT_LAYOUT_DEBUG) {
+                            Modifier.onGloballyPositioned { coords ->
+                                ChatLayoutLog.layoutLine("LazyColumn", coords)
+                            }
+                        } else {
+                            Modifier
+                        },
+                    ),
+                state = listState,
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                itemsIndexed(
+                    items = messages,
+                    key = { index, _ -> index },
+                ) { index, message ->
+                    ChatMessageItem(
+                        message = message,
+                        onRegenerate = {
+                            if (message.role == "assistant" && !isGenerating) {
+                                // Regenerate this assistant message
+                                val messagesBefore = messages.take(index)
+                                val lastUserMessage = messagesBefore.lastOrNull { it.role == "user" }
+                                
+                                if (lastUserMessage != null) {
+                                    isGenerating = true
+                                    scope.launch {
+                                        try {
+                                            var assistantResponse = ""
+                                            val generationStartTime = System.currentTimeMillis()
                                             
-                                            // Update UI with regenerated response
+                                            // Build conversation history using ContextBuilder
+                                            val historyMessages = messagesBefore.map { message ->
+                                                when (message.role) {
+                                                    "user" -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                                                    "assistant" -> LLMMessage(LLMMessage.MessageRole.ASSISTANT, message.content)
+                                                    else -> LLMMessage(LLMMessage.MessageRole.USER, message.content)
+                                                }
+                                            }
+
+                                            val contextParams = ContextParams(
+                                                systemPrompt = systemInstruction,
+                                                pinnedFacts = "",
+                                                userProfile = "",
+                                                crossSessionMemories = emptyList(),
+                                                inSessionSummaries = emptyList(),
+                                                history = historyMessages,
+                                                currentMessage = LLMMessage(LLMMessage.MessageRole.USER, lastUserMessage.content)
+                                            )
+
+                                            val llmMessages = ContextBuilder.buildContextMessages(contextParams)
+
+                                            // Convert LLMMessage[] to string prompt for engine
+                                            val fullPrompt = llmMessages.joinToString("\n") { 
+                                                "${it.role.name}: ${it.content}" 
+                                            }
+
+                                            android.util.Log.d("ChatScreen", "Regenerating message with context messages count: ${llmMessages.size}")
+                                            
+                                            var tokenCount = 0
+                                            engine.generate(fullPrompt).collect { token ->
+                                                tokenCount++
+                                                assistantResponse += token
+                                                
+                                                // Update UI with regenerated response
+                                                messages = messages.toMutableList().apply {
+                                                    this[index] = ChatMessage(
+                                                        role = "assistant",
+                                                        content = assistantResponse,
+                                                        tokenCount = tokenCount,
+                                                        generationTimeMs = System.currentTimeMillis() - generationStartTime,
+                                                        isStreaming = true,
+                                                    )
+                                                }
+                                            }
+                                            
+                                            // Final update
                                             messages = messages.toMutableList().apply {
                                                 this[index] = ChatMessage(
                                                     role = "assistant",
                                                     content = assistantResponse,
                                                     tokenCount = tokenCount,
                                                     generationTimeMs = System.currentTimeMillis() - generationStartTime,
-                                                    isStreaming = true,
+                                                    isStreaming = false,
                                                 )
                                             }
+                                            
+                                            // Save regenerated message to database if session is active
+                                            if (sessionId != null && repository != null) {
+                                                repository.addMessage(sessionId, "assistant", assistantResponse)
+                                                repository.updateSessionTimestamp(sessionId)
+                                            }
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("ChatScreen", "Regeneration failed", e)
+                                        } finally {
+                                            isGenerating = false
                                         }
-                                        
-                                        // Final update
-                                        messages = messages.toMutableList().apply {
-                                            this[index] = ChatMessage(
-                                                role = "assistant",
-                                                content = assistantResponse,
-                                                tokenCount = tokenCount,
-                                                generationTimeMs = System.currentTimeMillis() - generationStartTime,
-                                                isStreaming = false,
-                                            )
-                                        }
-                                        
-                                        // Save regenerated message to database if session is active
-                                        if (sessionId != null && repository != null) {
-                                            repository.addMessage(sessionId, "assistant", assistantResponse)
-                                            repository.updateSessionTimestamp(sessionId)
-                                        }
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("ChatScreen", "Regeneration failed", e)
-                                    } finally {
-                                        isGenerating = false
                                     }
                                 }
                             }
-                        }
-                    },
-                    onEdit = {
-                        if (message.role == "user" && !isGenerating) {
-                            editingMessageIndex = index
-                        }
-                    },
-                    onCopy = {
-                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        val clipData = android.content.ClipData.newPlainText("Message", message.content)
-                        clipboard.setPrimaryClip(clipData)
-                    },
-                )
-            }
-
-            // Pre–first-token: cycling thinking copy + indeterminate linear bar
-            item(key = "thinking_panel") {
-                ThinkingGenerationPanel(
-                    active = isGenerating && messages.lastOrNull()?.role != "assistant",
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                        },
+                        onEdit = {
+                            if (message.role == "user" && !isGenerating) {
+                                editingMessageIndex = index
+                            }
+                        },
+                        onCopy = {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            val clipData = android.content.ClipData.newPlainText("Message", message.content)
+                            clipboard.setPrimaryClip(clipData)
+                        },
+                    )
+                }
+                
+                // Pre–first-token: cycling thinking copy + indeterminate linear bar
+                item(key = "thinking_panel") {
+                    ThinkingGenerationPanel(
+                        active = isGenerating && messages.lastOrNull()?.role != "assistant",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
 
@@ -469,7 +453,7 @@ fun ChatScreen(
 
                                             val currentMessage = LLMMessage(LLMMessage.MessageRole.USER, input)
 
-                                            val contextParams = ContextBuilder.ContextParams(
+                                            val contextParams = ContextParams(
                                                 systemPrompt = systemInstruction,
                                                 pinnedFacts = "",
                                                 userProfile = "",
@@ -732,7 +716,6 @@ fun ChatScreen(
                 }
             }
         }
-        }
     }
     
     // Edit message dialog
@@ -773,7 +756,7 @@ fun ChatScreen(
                             }
                         }
 
-                        val contextParams = ContextBuilder.ContextParams(
+                        val contextParams = ContextParams(
                             systemPrompt = systemInstruction,
                             pinnedFacts = "",
                             userProfile = "",
@@ -1031,16 +1014,3 @@ fun ChatMessageItem(
         }
     }
 }
-
-/**
- * Data class for chat messages
- */
-data class ChatMessage(
-    val role: String, // "user" or "assistant"
-    val content: String,
-    val tokenCount: Int = 0,
-    val generationTimeMs: Long = 0,
-    val timestamp: Long = System.currentTimeMillis(),
-    /** When true, assistant message is still receiving tokens (shimmer + no metadata). */
-    val isStreaming: Boolean = false,
-)

@@ -37,17 +37,15 @@ internal class ChatViewModel(
             try {
                 // Add user message
                 val userMessage = ChatMessage(
-                    id = System.currentTimeMillis().toString(),
-                    content = message,
-                    isUser = true
+                    role = "user",
+                    content = message
                 )
                 _messages.value = _messages.value + userMessage
                 
                 // Create empty AI message
                 val aiMessage = ChatMessage(
-                    id = (System.currentTimeMillis() + 1).toString(),
-                    content = "",
-                    isUser = false
+                    role = "assistant",
+                    content = ""
                 )
                 _messages.value = _messages.value + aiMessage
                 
