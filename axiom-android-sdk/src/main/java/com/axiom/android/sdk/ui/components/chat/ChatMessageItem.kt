@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,7 +29,7 @@ data class ChatMessage(
 )
 
 /**
- * Chat message item component
+ * Chat message item component - Lumina Neural Design System
  * @param message Chat message to display
  * @param onRegenerate Callback for regenerating assistant messages
  * @param onEdit Callback for editing user messages
@@ -46,26 +47,32 @@ fun ChatMessageItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = if (message.role == "user") Arrangement.End else Arrangement.Start
     ) {
         Column(
-            modifier = Modifier.widthIn(max = 280.dp),
+            modifier = Modifier.widthIn(max = 320.dp),
             horizontalAlignment = if (message.role == "user") Alignment.End else Alignment.Start
         ) {
             // Message bubble (only render if content is not blank)
             if (message.content.isNotBlank()) {
                 Box(
                     modifier = Modifier
+                        .shadow(
+                            elevation = 4.dp,
+                            spotColor = AxiomTheme.colors.primary.copy(alpha = 0.1f),
+                            ambientColor = AxiomTheme.colors.primary.copy(alpha = 0.05f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
                         .background(
                             color = if (message.role == "user") {
                                 AxiomTheme.colors.primary
                             } else {
-                                AxiomTheme.colors.backgroundTertiary
+                                AxiomTheme.colors.backgroundSecondary
                             },
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(12.dp)
                         )
-                        .padding(12.dp)
+                        .padding(14.dp)
                 ) {
                     Text(
                         text = message.content.take(10000),
@@ -74,30 +81,31 @@ fun ChatMessageItem(
                         } else {
                             AxiomTheme.colors.textPrimary
                         },
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Normal,
+                        lineHeight = 20.sp,
                         maxLines = 100,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
             
-            // Action buttons
+            // Action buttons - simplified, minimal design
             Row(
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 6.dp),
                 horizontalArrangement = if (message.role == "user") Arrangement.End else Arrangement.Start,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (message.role == "assistant") {
                     IconButton(
                         onClick = onRegenerate,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(28.dp)
                     ) {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "Regenerate",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
+                            tint = AxiomTheme.colors.accentLuminous,
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
@@ -105,26 +113,26 @@ fun ChatMessageItem(
                 if (message.role == "user") {
                     IconButton(
                         onClick = onEdit,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(28.dp)
                     ) {
                         Icon(
                             Icons.Default.Edit,
                             contentDescription = "Edit",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
+                            tint = AxiomTheme.colors.accentLuminous,
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
                 
                 IconButton(
                     onClick = onCopy,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
                         Icons.Default.ContentCopy,
                         contentDescription = "Copy",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
+                        tint = AxiomTheme.colors.accentLuminous,
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
