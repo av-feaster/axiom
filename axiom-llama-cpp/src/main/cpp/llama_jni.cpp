@@ -330,8 +330,30 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
     
     // Get callback method
     jclass callback_class = env->GetObjectClass(callback);
+    if (callback_class == nullptr) {
+        LOGE("Failed to get callback class");
+        env->ReleaseStringUTFChars(prompt, prompt_cstr);
+        return;
+    }
+    
     g_callback_method = env->GetMethodID(callback_class, "invoke", "(Ljava/lang/String;)V");
+    
+    if (g_callback_method == nullptr) {
+        LOGE("Failed to get callback method 'invoke'");
+        if (env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+        }
+        env->ReleaseStringUTFChars(prompt, prompt_cstr);
+        return;
+    }
+    
     g_callback_object = env->NewGlobalRef(callback);
+    if (g_callback_object == nullptr) {
+        LOGE("Failed to create global reference for callback");
+        env->ReleaseStringUTFChars(prompt, prompt_cstr);
+        return;
+    }
     
     // Get vocabulary from model
     const llama_vocab* vocab = llama_model_get_vocab(g_model);
@@ -357,6 +379,7 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
     }
     
     tokens.resize(n_tokens);
+    LOGI("Tokenized prompt into %d tokens", n_tokens);
     
     // Create batch for prompt
     llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
@@ -367,6 +390,8 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         return;
     }
     
+    LOGI("Prompt decoded successfully, starting generation loop");
+    
     // Generation loop
     for (int i = 0; i < g_max_tokens; i++) {
         // Check for cancellation
@@ -376,6 +401,11 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         }
         
         float* logits = llama_get_logits(g_context);
+        
+        if (logits == nullptr) {
+            LOGE("Failed to get logits");
+            break;
+        }
         
         // Simple greedy sampling
         llama_token best_token = 0;
@@ -397,6 +427,7 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         int token_len = llama_token_to_piece(vocab, new_token, token_str, sizeof(token_str), 0, true);
         
         if (token_len <= 0) {
+            LOGI("Token length <= 0, ending generation at iteration %d", i);
             break;
         }
         
@@ -405,11 +436,31 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         
         // Call Kotlin callback with sanitized token
         jstring token_jstring = env->NewStringUTF(sanitized.c_str());
+        if (token_jstring == nullptr) {
+            LOGE("Failed to create Java string from token");
+            break;
+        }
+        
         env->CallVoidMethod(g_callback_object, g_callback_method, token_jstring);
+        
+        // Check for JNI exception
+        if (env->ExceptionCheck()) {
+            LOGE("JNI exception occurred during callback");
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+            env->DeleteLocalRef(token_jstring);
+            break;
+        }
+        
         env->DeleteLocalRef(token_jstring);
+        
+        if (i == 0) {
+            LOGI("First token generated successfully");
+        }
         
         // Check for end of sequence
         if (new_token == llama_vocab_eos(vocab)) {
+            LOGI("EOS token detected at iteration %d", i);
             break;
         }
         
@@ -417,10 +468,12 @@ Java_com_axiom_llama_cpp_LlamaCppEngine_nativeStream(JNIEnv* env, jobject /* thi
         llama_batch next_batch = llama_batch_get_one(&new_token, 1);
         
         if (llama_decode(g_context, next_batch) != 0) {
-            LOGE("Failed to decode during streaming");
+            LOGE("Failed to decode during streaming at iteration %d", i);
             break;
         }
     }
+    
+    LOGI("Generation loop completed, generated %d iterations", g_max_tokens);
     
     env->ReleaseStringUTFChars(prompt, prompt_cstr);
     

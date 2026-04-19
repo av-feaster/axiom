@@ -20,6 +20,11 @@ class LlamaCppEngine : LLMEngine {
     private var isGeneratingFlag = false
     private var completionEnd = CompletableDeferred<Unit>()
     private var activeCancelCallback: (() -> Unit)? = null
+    
+    init {
+        // Initialize completionEnd as completed so first generation doesn't block
+        completionEnd.complete(Unit)
+    }
     private var currentConfig: LLMConfig? = null
     private var currentModelConfig: ModelConfig? = null
     
@@ -114,14 +119,18 @@ class LlamaCppEngine : LLMEngine {
     }
 
     override suspend fun stream(prompt: String, onToken: (String) -> Unit): GenerationResult {
+        Log.i(TAG, "stream() method entered")
         return withContext(Dispatchers.IO) {
+            Log.i(TAG, "stream() in IO context")
             if (!isEngineInitialized) {
                 Log.e(TAG, "Stream called but engine not initialized")
                 throw IllegalStateException("Engine not initialized")
             }
             
+            Log.i(TAG, "Waiting for completionEnd")
             // Wait for any ongoing completion to finish
             completionEnd.await()
+            Log.i(TAG, "completionEnd await completed")
             
             // Set up new completion
             val newCompletionEnd = CompletableDeferred<Unit>()
